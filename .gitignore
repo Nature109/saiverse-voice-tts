@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+external/
+voice_profiles/samples/**/*.wav
+!voice_profiles/samples/.gitkeep
+models/

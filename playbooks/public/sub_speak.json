@@ -1,0 +1,58 @@
+{
+    "name": "sub_speak",
+    "description": "Compose final response, speak, and auto-TTS via voice-tts expansion pack",
+    "input_schema": [
+        {
+            "name": "input",
+            "description": "Composite prompt containing user request and context"
+        },
+        {
+            "name": "metadata",
+            "description": "Optional metadata from tool execution (e.g., media attachments)"
+        }
+    ],
+    "router_callable": false,
+    "nodes": [
+        {
+            "id": "compose",
+            "type": "llm",
+            "context_profile": "conversation",
+            "action": null,
+            "speak": true,
+            "metadata_key": "metadata",
+            "memorize": {
+                "tags": [
+                    "conversation"
+                ]
+            },
+            "output_keys": [
+                {
+                    "text": "speak_content"
+                }
+            ],
+            "next": "process_body",
+            "conditional_next": null
+        },
+        {
+            "id": "process_body",
+            "type": "tool",
+            "action": "control_body",
+            "args_input": {
+                "message": "speak_content"
+            },
+            "output_key": null,
+            "next": "tts_speak"
+        },
+        {
+            "id": "tts_speak",
+            "type": "tool",
+            "action": "speak_as_persona",
+            "args_input": {
+                "text": "speak_content"
+            },
+            "output_key": null,
+            "next": null
+        }
+    ],
+    "start_node": "compose"
+}
