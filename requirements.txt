@@ -1,14 +1,21 @@
 # Core dependencies (always required by this pack)
 numpy>=1.24
 sounddevice>=0.4.6
+soundfile>=0.12
 huggingface_hub>=0.20
 
-# TTS backends are installed separately via scripts/install_backends.py.
+# TTS backends are installed separately by setup.bat / install_backends.py.
 # Each backend clones its upstream repository into external/ and (where
 # applicable) runs `pip install -e .` on it. Backend-specific Python deps
 # (torch, transformers, etc.) are pulled in by each upstream's setup.
 #
-#   python scripts/install_backends.py qwen3_tts   # default, recommended
-#   python scripts/install_backends.py gpt_sovits
+# Preferred entry point (Windows):
+#   setup.bat                    # installs gpt_sovits by default
+#   setup.bat qwen3_tts
+#   setup.bat all
+#
+# Direct invocation (cross-platform):
+#   python scripts/install_backends.py gpt_sovits   # recommended
+#   python scripts/install_backends.py qwen3_tts
 #   python scripts/install_backends.py irodori
 #   python scripts/install_backends.py all

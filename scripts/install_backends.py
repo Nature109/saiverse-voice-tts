@@ -34,6 +34,9 @@ _REPOS = {
         "dir": "GPT-SoVITS",
         "pip_install": False,
         "pip_install_requirements": "requirements.txt",
+        "pre_install_pip": ["opencc-python-reimplemented"],
+        "strip_opencc_from_requirements": True,
+        "extra_dirs": ["GPT_SoVITS/pretrained_models/fast_langdetect"],
         "hf_weights": ["lj1995/GPT-SoVITS"],
         "weights_local_dir": "external/GPT-SoVITS/GPT_SoVITS/pretrained_models",
     },
@@ -47,6 +50,40 @@ _REPOS = {
         ],
     },
 }
+
+
+def _strip_opencc_from_requirements(req_path: Path) -> None:
+    """Comment out `opencc` and drop `--no-binary=opencc` from requirements.txt.
+
+    Upstream ``opencc`` fails to build on Windows without a specific C++
+    toolchain (Access Denied during build). We replace it with the pure-Python
+    ``opencc-python-reimplemented`` (installed via pre_install_pip) which
+    exposes the same API GPT-SoVITS depends on.
+    """
+    if not req_path.exists():
+        return
+    original = req_path.read_text(encoding="utf-8")
+    out_lines: list[str] = []
+    changed = False
+    for line in original.splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith("--no-binary=opencc"):
+            changed = True
+            continue
+        if (
+            stripped == "opencc"
+            or stripped.startswith("opencc==")
+            or stripped.startswith("opencc>=")
+            or stripped.startswith("opencc<")
+            or stripped.startswith("opencc~")
+        ):
+            out_lines.append(f"# {line}  # stripped by install_backends.py")
+            changed = True
+            continue
+        out_lines.append(line)
+    if changed:
+        req_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        LOGGER.info("Stripped opencc from %s", req_path)
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -89,6 +126,9 @@ def install(backend: str) -> None:
 
     _clone(spec["url"], repo_dir)
 
+    for pkg in spec.get("pre_install_pip", []):
+        _run([sys.executable, "-m", "pip", "install", pkg])
+
     if spec.get("pip_install"):
         _pip_install_editable(repo_dir)
 
@@ -96,9 +136,16 @@ def install(backend: str) -> None:
     if req_file:
         req_path = repo_dir / req_file
         if req_path.exists():
+            if spec.get("strip_opencc_from_requirements"):
+                _strip_opencc_from_requirements(req_path)
             _run([sys.executable, "-m", "pip", "install", "-r", str(req_path)])
         else:
             LOGGER.warning("requirements file not found: %s", req_path)
+
+    for sub in spec.get("extra_dirs", []):
+        target = repo_dir / sub
+        target.mkdir(parents=True, exist_ok=True)
+        LOGGER.info("Ensured directory exists: %s", target)
 
     weights_local = None
     if "weights_local_dir" in spec:

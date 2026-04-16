@@ -1,152 +1,136 @@
 # saiverse-voice-tts
 
-SAIVerse の拡張パック。ペルソナの発話テキストを、ペルソナ毎に登録した参照音声でゼロショット音声クローン合成し、バックエンドPCのスピーカーから自動再生します。
+SAIVerse 拡張パック。ペルソナが発話したテキストを、ペルソナごとに登録した参照音声でゼロショット音声クローン合成し、バックエンドPCのスピーカーから**話し始め 0.5秒以内**で自動再生します。
 
 - **本体(SAIVerse)への改修は不要** — Tool + Playbook 差し替えのみで動作
-- **3エンジン切替可能** — Qwen3-TTS (OSS) / GPT-SoVITS / Irodori-TTS
-- **全てローカル推論** — 外部APIサーバ不要(各上流リポジトリを `external/` に clone して直接Python API呼び出し)
-- **ノンブロッキング** — SEA の playbook 実行を止めずに裏で合成・再生
+- **ストリーミング推論対応** — 合成完了を待たずチャンク単位でリアルタイム再生
+- **3エンジン切替可能** — GPT-SoVITS(推奨)/ Qwen3-TTS / Irodori-TTS
+- **全てローカル推論** — 外部APIサーバ不要
+- **Markdown/URI 自動除去** — ペルソナ応答中のリンクURLなどは読み上げない
 
-## ライセンス(再配布可否)
+## クイックスタート(Windows)
 
-配布時にモデル重みを内包する想定のため、全エンジンの上流ライセンスを確認済み。
+SAIVerse 本体のセットアップ完了後、このリポジトリを `expansion_data/` 配下に配置し `setup.bat` を実行するだけです。
 
-| エンジン | コード | 重み | 再配布 |
-|---|---|---|---|
-| Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ 条件: ライセンス全文同梱 + 変更点明示 + NOTICE同梱 + 帰属表示 |
-| GPT-SoVITS | MIT | MIT | ✅ 条件: ライセンス全文 + 著作権表示を同梱 |
-| Irodori-TTS | MIT | MIT | ✅ 条件: ライセンス全文 + 著作権表示を同梱(※ベース依存 `llm-jp/llm-jp-3-150m`, `Aratako/Semantic-DACVAE-Japanese-32dim` の個別ライセンスを配布前に要再確認) |
+```batch
+cd %USERPROFILE%\SAIVerse\expansion_data
+git clone https://github.com/Nature109/saiverse-voice-tts.git
+cd saiverse-voice-tts
+setup.bat
+```
 
-**配布物には `external/<repo>/LICENSE` をそのまま同梱**することで条件を満たせます。
+`setup.bat` は以下を全自動で行います:
 
-## インストール
+1. SAIVerse の `.venv` をアクティベート
+2. パック依存(`numpy` / `sounddevice` / `soundfile` / `huggingface_hub`)をインストール
+3. `install_backends.py` で GPT-SoVITS を clone + 依存インストール + 重み DL
+4. `torch` が CUDA 版であることを確認(そうでなければ `cu121` 版を自動再導入)
+5. 音声デバイス一覧を表示、参照音声ファイルの有無をチェック
 
-1. リポジトリを配置:
-   ```bash
-   cd <SAIVerse>/expansion_data
-   git clone <this-repo> saiverse-voice-tts
-   cd saiverse-voice-tts
-   pip install -r requirements.txt
-   ```
+完了後、**参照音声の配置**だけ手動で:
 
-2. 使用するエンジンをインストール(1つ以上):
-   ```bash
-   # 推奨(単発で最小依存)
-   python scripts/install_backends.py qwen3_tts
+1. `voice_profiles/samples/_default/ref.wav` に 3秒以上の日本語音声 wav を置く
+2. `voice_profiles/registry.json` の `ref_text` を wav の書き起こしに合わせる
 
-   # GPT-SoVITS を使う場合
-   python scripts/install_backends.py gpt_sovits
+あとは SAIVerse 本体を通常通り起動するだけで、ペルソナの発話に合わせて音声が再生されます。
 
-   # Irodori-TTS を使う場合
-   python scripts/install_backends.py irodori
+## 動作要件
 
-   # 3つ全部入れる場合
-   python scripts/install_backends.py all
-   ```
-   スクリプトは以下を自動実行します:
-   - `external/<name>/` に上流リポジトリを `git clone --depth 1`
-   - 必要な場合 `pip install -e` でローカルパッケージ化
-   - HuggingFace から学習済み重みを snapshot_download
+| 項目 | 最小 | 推奨 |
+|---|---|---|
+| OS | Windows 10/11 or Linux | Windows 11 |
+| Python | 3.10 | 3.10 |
+| GPU | なし(CPU推論可、ただし非常に遅い) | NVIDIA RTX 3060以上 / VRAM 6GB以上 |
+| CUDA | — | 12.1 以上 |
+| ディスク | 8GB | 20GB(全エンジン導入時) |
 
-3. 参照音声を配置:
-   ```
-   voice_profiles/
-   ├── registry.json              # ← 編集
-   └── samples/
-       └── <persona_id>/ref.wav   # ← 3秒以上の日本語参照音声
-   ```
+GPT-SoVITS を CPU で動かすのは実用的ではありません(1発話数分)。GPU 必須と考えてください。
 
-4. `voice_profiles/registry.json` にペルソナ毎のエントリを追加:
-   ```json
-   {
-     "air_city_a": {
-       "engine": "qwen3_tts",
-       "ref_audio": "samples/air_city_a/ref.wav",
-       "ref_text": "参照音声の書き起こしテキスト",
-       "params": { "temperature": 0.7 }
-     },
-     "_default": {
-       "engine": "qwen3_tts",
-       "ref_audio": "samples/_default/ref.wav",
-       "ref_text": "デフォルト参照音声の書き起こし"
-     }
-   }
-   ```
+## バックエンド選択
 
-5. SAIVerse を起動:
-   ```bash
-   python main.py city_a
-   ```
-   起動時に Tool (`speak_as_persona`) とプレイブック (`sub_speak` 上書き版) が自動ロードされます。ペルソナが発話するたびに TTS が鳴ります。
+| エンジン | 話し始め(2回目以降) | 品質 | 推論速度(RTL) | ディスク | 備考 |
+|---|---|---|---|---|---|
+| **GPT-SoVITS**(推奨) | 0.5秒 | ◎ | 1.3〜1.5倍実時間 | 約4GB | ストリーミング対応、日本語実績多数 |
+| Qwen3-TTS | 〜30秒 | ◎ | リアルタイム | 約4GB | `generate_voice_clone` API、ストリーミング未対応 |
+| Irodori-TTS | 未検証 | — | — | 約2GB | 実装済みだが本環境で未検証 |
 
-## ディレクトリ構成
+**初版は GPT-SoVITS のみを setup.bat のデフォルトにしてあります**。他のエンジンを試す場合は `setup.bat all` や `setup.bat qwen3_tts` で切替できます。
+
+## ファイル構成
 
 ```
 saiverse-voice-tts/
 ├── README.md
-├── requirements.txt              ← 本パック固有の最小依存(numpy/sounddevice/huggingface_hub)
-├── scripts/
-│   └── install_backends.py       ← 上流のclone + 重みDL + pip install -e
-├── external/                     ← .gitignoreで除外。各上流リポジトリをclone
+├── SETUP.md                       ← 詳細セットアップ / トラブルシューティング
+├── ARCHITECTURE.md                ← 内部アーキテクチャ
+├── CHANGELOG.md                   ← 変更履歴
+├── setup.bat                      ← Windows 向けワンクリックセットアップ
+├── requirements.txt               ← パック固有の最小依存
+├── scripts/install_backends.py    ← 上流 clone + 重み DL + pip install
+├── external/                      ← .gitignore。各上流リポジトリを clone
 │   ├── Qwen3-TTS/
 │   ├── GPT-SoVITS/
 │   └── Irodori-TTS/
 ├── tools/speak/
-│   ├── schema.py                 ← speak_as_persona Tool本体
-│   ├── profiles.py               ← registry.json loader + _default fallback
-│   ├── playback_worker.py        ← FIFOキュー + ワーカースレッド + wav保存 + sounddevice再生
+│   ├── schema.py                  ← speak_as_persona Tool
+│   ├── text_cleaner.py            ← Markdown/URI 除去
+│   ├── profiles.py                ← registry.json ローダ
+│   ├── playback_worker.py         ← FIFO キュー + ストリーミング再生
 │   └── engine/
-│       ├── __init__.py           ← create_engine() ファクトリ
-│       ├── base.py               ← TTSEngine抽象 + SynthesisResult
-│       ├── qwen3_tts.py          ← Qwen3TTSModel.generate_voice_clone() 呼び出し
-│       ├── gpt_sovits.py         ← TTS_infer_pack.TTS.run() 呼び出し
-│       └── irodori.py            ← InferenceRuntime.synthesize() 呼び出し
+│       ├── base.py                ← TTSEngine 抽象
+│       ├── gpt_sovits.py
+│       ├── qwen3_tts.py
+│       └── irodori.py
 ├── playbooks/public/
-│   └── sub_speak.json            ← 本体sub_speakを上書きし、tts_speakノードを末尾に追加
+│   └── sub_speak.json             ← 本体 sub_speak を上書きし、tts_speak ノード追加
 ├── voice_profiles/
-│   ├── registry.json
-│   └── samples/                  ← ペルソナID毎のwav
-└── config/
-    └── default.json              ← エンジン別設定(model_id, device, dtype等)
+│   ├── README.md                  ← プロファイル追加手順
+│   ├── registry.json              ← ペルソナ毎の参照音声設定
+│   └── samples/<persona_id>/ref.wav
+└── config/default.json            ← エンジン共通設定
 ```
 
-## 仕組み
+## 使い方
 
-### Tool: `speak_as_persona`
-- SEA の playbook から呼ばれる
-- 合成ジョブを内部キューへ投入して**即 return**(fire-and-forget)
-- 裏のワーカースレッドが順次:
-  1. `get_active_persona_id()` でペルソナ特定
-  2. `registry.json` からプロファイル取得(未登録なら `_default`)
-  3. エンジンを lazy-load(初回のみモデルロード)
-  4. `synthesize(text, ref_audio, ref_text, params)`
-  5. wav保存 (`~/.saiverse/user_data/voice/out/<uuid>.wav`)
-  6. `sounddevice` で再生
+### 参照音声の追加(ペルソナ個別)
 
-### Playbook 差し替え
-`playbooks/public/sub_speak.json` が本体の `builtin_data/playbooks/public/sub_speak.json` を上書きし、既存の compose → control_body の後に `speak_as_persona` ノードを追加します。
+`voice_profiles/registry.json` にペルソナ ID をキーとしてエントリを追加:
 
-## 設定: `config/default.json`
+```json
+{
+    "air_city_a": {
+        "engine": "gpt_sovits",
+        "ref_audio": "samples/air_city_a/ref.wav",
+        "ref_text": "参照音声の正確な書き起こし。",
+        "params": {
+            "speed": 1.0,
+            "temperature": 1.0,
+            "top_k": 15,
+            "text_split_method": "cut5"
+        }
+    },
+    "_default": { ... }
+}
+```
 
-| キー | 既定値 | 意味 |
-|---|---|---|
-| `default_engine` | `"qwen3_tts"` | プロファイルに `engine` が無い場合の既定 |
-| `play_mode` | `"queue"` | FIFO順次再生(barge-in 将来拡張用) |
-| `output_device` | `null` | sounddevice 出力デバイス番号(未指定=OS既定) |
-| `gc_hours` | `24` | 生成wavの自動削除猶予 |
-| `engines.qwen3_tts.model_id` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | モデル |
-| `engines.qwen3_tts.dtype` | `bfloat16` | `float16`/`bfloat16`/`float32` |
-| `engines.gpt_sovits.config_yaml` | `null` | GPT-SoVITS `tts_infer.yaml` のパス(未指定=既定を使用) |
-| `engines.irodori.checkpoint` | `Aratako/Irodori-TTS-500M-v2` | モデル |
-| `engines.irodori.codec_repo` | `Aratako/Semantic-DACVAE-Japanese-32dim` | codec VAE |
+ペルソナ ID にエントリが無ければ `_default` にフォールバックします。詳細は [voice_profiles/README.md](voice_profiles/README.md) 参照。
 
-## 制約(初版)
+### 自動再生の ON/OFF
 
-- **自動発話のみ**(ON/OFF切替なし)。発話は全て TTS される
-- **バックエンドPCのスピーカー再生のみ**。Tailscale越しのスマホ再生は未対応(本体改修が必要で別リクエスト化)
-- 参照音声は **registry.json 手書き**。UIは未実装
-- プロファイル未登録ペルソナは `_default` にフォールバック。`_default` も無ければ TTS スキップ
+config 上でのトグルは現状未実装(常に自動再生)。将来的にはペルソナ単位で設定可能にする予定(本体側のアドオン仕様待ち)。
+
+### Tailscale 運用について
+
+**現状、バックエンド PC のスピーカーからのみ再生**されます。Tailscale 経由でリモートから接続したクライアント側では音が鳴りません。本体側のアドオンフレームワーク(計画中)経由でクライアント配信できるようにする改修を依頼済みです。
 
 ## ライセンス
 
-本パック自体は Apache 2.0。各エンジンの利用/再配布は上流のライセンスに従ってください(`external/<repo>/LICENSE` を同梱してください)。
+本パック自体は Apache 2.0。各エンジンの再配布は上流ライセンスに従ってください。
+
+| エンジン | コード | 重み | 再配布 |
+|---|---|---|---|
+| Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ |
+| GPT-SoVITS | MIT | MIT | ✅ |
+| Irodori-TTS | MIT | MIT | ✅(要: ベース依存の個別再確認) |
+
+配布物には `external/<repo>/LICENSE` を同梱してください。
