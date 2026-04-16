@@ -78,10 +78,12 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     SAIVerse builds). The server-side playback is not affected either way.
     """
     if not message_id:
-        LOGGER.info(
-            "notify_audio_ready: SKIPPED (message_id=None). "
-            "Host-side set_active_message_id may not be wired or did not "
-            "propagate to this ContextVar scope."
+        # 本体側で set_active_message_id の配線が抜けていたり、ContextVar が
+        # 伝播しない経路だと毎発話ごとに発火する。アドオン連携が機能しない
+        # 指標となるため WARNING にしておく。
+        LOGGER.warning(
+            "notify_audio_ready skipped: message_id is None. "
+            "Bubble playback button will not be registered for this utterance."
         )
         return
     audio_path = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
@@ -89,11 +91,19 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     event_ok = False
     try:
         from saiverse.addon_metadata import set_metadata  # type: ignore
+        # audio_path: フロントが <audio src=...> に使う URL
         set_metadata(
             message_id=message_id,
             addon_name=_ADDON_NAME,
             key="audio_path",
             value=audio_path,
+        )
+        # audio_file: バックエンド配信エンドポイントが実ファイルを開くためのローカルパス
+        set_metadata(
+            message_id=message_id,
+            addon_name=_ADDON_NAME,
+            key="audio_file",
+            value=str(wav_path),
         )
         meta_ok = True
     except Exception as exc:
@@ -109,9 +119,9 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
         event_ok = True
     except Exception as exc:
         LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
-    LOGGER.info(
-        "notify_audio_ready: msg=%s audio_path=%s metadata=%s event=%s",
-        message_id, audio_path, meta_ok, event_ok,
+    LOGGER.debug(
+        "notify_audio_ready: msg=%s metadata=%s event=%s",
+        message_id, meta_ok, event_ok,
     )
 
 
@@ -424,7 +434,7 @@ class _TTSWorker:
         # time (tool invocation) but may be gone by the time the worker
         # thread actually picks up the job.
         captured_msg_id = _get_active_message_id()
-        LOGGER.info(
+        LOGGER.debug(
             "enqueue: job=%s persona=%s message_id=%s",
             job_id, persona_id, captured_msg_id,
         )
