@@ -15,7 +15,7 @@ from typing import Any, Dict
 from tools.core import ToolSchema
 from tools.context import get_active_persona_id
 
-from .playback_worker import enqueue_tts
+from .playback_worker import enqueue_tts, get_effective_params
 from .text_cleaner import clean_text_for_tts
 
 LOGGER = logging.getLogger(__name__)
@@ -49,6 +49,21 @@ def speak_as_persona(text: str) -> Dict[str, Any]:
         return {"content": "", "status": "skipped_empty"}
 
     persona_id = get_active_persona_id()
+
+    # Honour addon UI toggles: the addon can be globally disabled, or the
+    # "auto_speak" flag can be off (per-persona overrides applied by the host).
+    params = get_effective_params(persona_id)
+    if not params.get("_enabled", True):
+        LOGGER.debug(
+            "speak_as_persona skipped: addon disabled (persona=%s)", persona_id,
+        )
+        return {"content": "", "status": "skipped_addon_disabled"}
+    if not params.get("auto_speak", True):
+        LOGGER.debug(
+            "speak_as_persona skipped: auto_speak=false (persona=%s)", persona_id,
+        )
+        return {"content": "", "status": "skipped_auto_speak_off"}
+
     job_id = enqueue_tts(cleaned, persona_id)
     LOGGER.debug(
         "speak_as_persona enqueued: persona=%s job=%s len=%d (orig_len=%d)",

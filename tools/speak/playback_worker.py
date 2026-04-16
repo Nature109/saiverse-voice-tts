@@ -39,6 +39,38 @@ def _get_active_message_id() -> Optional[str]:
         return None
 
 
+def _get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
+    """Return UI-driven addon params merged with pack-local defaults.
+
+    Preference order:
+      1. ``saiverse.addon_config.get_params`` (host UI-managed values, with
+         persona-level overrides applied by the host)
+      2. ``config/default.json`` of this pack (legacy / backward compat for
+         SAIVerse builds without the addon framework)
+      3. Hard-coded "enabled, everything on" fallback
+    """
+    cfg = _worker._load_config() if "_worker" in globals() else {}
+    params: Dict[str, Any] = {
+        "_enabled": True,
+        "auto_speak": True,
+        "server_side_playback": bool(cfg.get("server_side_playback", True)),
+        "streaming": bool(cfg.get("streaming", True)),
+    }
+    try:
+        from saiverse.addon_config import get_params  # type: ignore
+        remote = get_params(_ADDON_NAME, persona_id=persona_id)
+        if isinstance(remote, dict):
+            params.update(remote)
+    except Exception as exc:
+        LOGGER.debug("addon_config.get_params unavailable: %s", exc)
+    return params
+
+
+def get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
+    """Public helper for the Tool to inspect effective addon settings."""
+    return _get_effective_params(persona_id)
+
+
 def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     """Register wav metadata and broadcast an audio_ready event to the host.
 
@@ -289,10 +321,18 @@ class _TTSWorker:
             LOGGER.error("Failed to initialize engine '%s': %s", engine_name, exc)
             return
 
-        use_streaming = cfg.get("streaming", True) and getattr(
+        effective = _get_effective_params(job.persona_id)
+        LOGGER.debug(
+            "effective addon params for persona=%s: streaming=%s server_side=%s enabled=%s",
+            job.persona_id,
+            effective.get("streaming"),
+            effective.get("server_side_playback"),
+            effective.get("_enabled"),
+        )
+        use_streaming = bool(effective.get("streaming", True)) and getattr(
             engine, "supports_streaming", False
         )
-        server_side_playback = bool(cfg.get("server_side_playback", True))
+        server_side_playback = bool(effective.get("server_side_playback", True))
 
         if use_streaming:
             ok = self._play_streaming(

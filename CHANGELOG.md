@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### アドオン UI トグルを実際に尊重するよう接続(experiment/addon-config-consume)
+
+SAIVerse 本体に `saiverse.addon_config.get_params` / `is_addon_enabled`(コミット `56c344a`)が追加されたため、拡張パック側で読み取って反映するようにした。
+
+- `tools/speak/playback_worker.py`:
+  - `_get_effective_params(persona_id)` を新設。本体 `saiverse.addon_config.get_params` を優先し、未提供時は `config/default.json` の既存値にフォールバック
+  - `_process()` は config ではなく effective params を見て `streaming` / `server_side_playback` を判定
+  - 有効 params のデバッグログを追加
+  - `get_effective_params` を公開関数として export
+- `tools/speak/schema.py`:
+  - enqueue 前に `_enabled` / `auto_speak` をチェックし、OFF のときは即 return
+  - 戻り値の `status` に `skipped_addon_disabled` / `skipped_auto_speak_off` を追加
+
+これで UI の「自動発話」「サーバー側再生」「ストリーミング推論」トグルおよびペルソナ別上書きがランタイムに反映される。本体 API が無い環境では従来通り `config/default.json` の値で動作。
+
 ### SAIVerse 本体アドオン基盤への連携(experiment/addon-integration)
 
 SAIVerse 本体の `feature/memory-notes-and-organize` ブランチで実装されたアドオン基盤(`ab22842`)に対応。
