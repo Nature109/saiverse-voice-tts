@@ -9,10 +9,12 @@ Upstream: https://github.com/RVC-Boss/GPT-SoVITS
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import numpy as np
 
@@ -36,6 +38,40 @@ def _prepare_sys_path() -> None:
             sys.path.insert(0, sp)
 
 
+@contextlib.contextmanager
+def _cwd(path: Path) -> Iterator[None]:
+    """Temporarily chdir to ``path``. GPT-SoVITS uses relative paths internally
+    (pretrained_models/..., configs/...), so we must be inside the repo root
+    during both initialization and inference."""
+    prev = os.getcwd()
+    os.chdir(str(path))
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
+@contextlib.contextmanager
+def _shadowed_tools_namespace() -> Iterator[None]:
+    """Temporarily detach SAIVerse's ``tools`` package from sys.modules so that
+    GPT-SoVITS's relative ``from tools.audio_sr import ...`` imports resolve
+    against its own ``external/GPT-SoVITS/tools`` directory (which is on
+    sys.path) rather than the host project's ``tools`` package."""
+    backup = {
+        k: v for k, v in sys.modules.items()
+        if k == "tools" or k.startswith("tools.")
+    }
+    for k in list(backup):
+        del sys.modules[k]
+    try:
+        yield
+    finally:
+        for k in list(sys.modules):
+            if (k == "tools" or k.startswith("tools.")) and k not in backup:
+                del sys.modules[k]
+        sys.modules.update(backup)
+
+
 class GPTSoVITSEngine(TTSEngine):
     name = "gpt_sovits"
 
@@ -50,24 +86,29 @@ class GPTSoVITSEngine(TTSEngine):
         if self._tts is not None:
             return
         _prepare_sys_path()
-        try:
-            from TTS_infer_pack.TTS import TTS, TTS_Config  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(
-                "Failed to import GPT-SoVITS TTS_infer_pack. "
-                "Ensure external/GPT-SoVITS is properly installed and its "
-                "dependencies are available."
-            ) from exc
 
-        config_yaml = self.config.get("config_yaml")
-        if config_yaml:
-            cfg = TTS_Config(str(config_yaml))
-        else:
-            default_cfg = _EXTERNAL_REPO / "GPT_SoVITS" / "configs" / "tts_infer.yaml"
-            cfg = TTS_Config(str(default_cfg)) if default_cfg.exists() else TTS_Config()
+        # GPT-SoVITS reads pretrained_models/... via relative paths, so init
+        # must happen with cwd == repo root. We also need to shadow SAIVerse's
+        # `tools` package so that GPT-SoVITS's `from tools.audio_sr import ...`
+        # resolves to its own tools directory.
+        with _cwd(_EXTERNAL_REPO), _shadowed_tools_namespace():
+            try:
+                from TTS_infer_pack.TTS import TTS, TTS_Config  # type: ignore
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Failed to import GPT-SoVITS TTS_infer_pack. "
+                    "Ensure external/GPT-SoVITS is properly installed and its "
+                    "dependencies are available."
+                ) from exc
 
-        LOGGER.info("Loading GPT-SoVITS TTS pipeline (config=%s)", cfg)
-        self._tts = TTS(cfg)
+            config_yaml = self.config.get("config_yaml")
+            if config_yaml:
+                cfg = TTS_Config(str(config_yaml))
+            else:
+                cfg = TTS_Config("GPT_SoVITS/configs/tts_infer.yaml")
+
+            LOGGER.info("Loading GPT-SoVITS TTS pipeline")
+            self._tts = TTS(cfg)
 
     def synthesize(
         self,
@@ -81,10 +122,6 @@ class GPTSoVITSEngine(TTSEngine):
 
         if not ref_audio:
             raise ValueError("GPT-SoVITS requires ref_audio.")
-
-        if ref_audio != self._last_ref:
-            self._tts.set_ref_audio(ref_audio)
-            self._last_ref = ref_audio
 
         inputs: Dict[str, Any] = {
             "text": text,
@@ -101,19 +138,22 @@ class GPTSoVITSEngine(TTSEngine):
             "return_fragment": False,
         }
 
-        result_iter = self._tts.run(inputs)
+        with _cwd(_EXTERNAL_REPO):
+            if ref_audio != self._last_ref:
+                self._tts.set_ref_audio(ref_audio)
+                self._last_ref = ref_audio
 
-        chunks: list[np.ndarray] = []
-        sr = 32000
-        for sr_chunk, audio_chunk in result_iter:
-            sr = int(sr_chunk)
-            if not isinstance(audio_chunk, np.ndarray):
-                audio_chunk = np.asarray(audio_chunk)
-            if audio_chunk.dtype == np.int16:
-                audio_chunk = audio_chunk.astype(np.float32) / 32768.0
-            else:
-                audio_chunk = audio_chunk.astype(np.float32)
-            chunks.append(audio_chunk)
+            chunks: list[np.ndarray] = []
+            sr = 32000
+            for sr_chunk, audio_chunk in self._tts.run(inputs):
+                sr = int(sr_chunk)
+                if not isinstance(audio_chunk, np.ndarray):
+                    audio_chunk = np.asarray(audio_chunk)
+                if audio_chunk.dtype == np.int16:
+                    audio_chunk = audio_chunk.astype(np.float32) / 32768.0
+                else:
+                    audio_chunk = audio_chunk.astype(np.float32)
+                chunks.append(audio_chunk)
 
         if not chunks:
             raise RuntimeError("GPT-SoVITS produced no audio.")
