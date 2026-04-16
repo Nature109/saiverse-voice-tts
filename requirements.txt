@@ -11,11 +11,10 @@ huggingface_hub>=0.20
 #
 # Preferred entry point (Windows):
 #   setup.bat                    # installs gpt_sovits by default
-#   setup.bat qwen3_tts
+#   setup.bat irodori            # experimental
 #   setup.bat all
 #
 # Direct invocation (cross-platform):
 #   python scripts/install_backends.py gpt_sovits   # recommended
-#   python scripts/install_backends.py qwen3_tts
 #   python scripts/install_backends.py irodori
 #   python scripts/install_backends.py all

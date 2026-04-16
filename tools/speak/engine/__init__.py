@@ -8,9 +8,6 @@ from .base import SynthesisResult, TTSEngine
 
 def create_engine(name: str, engine_config: Dict[str, Any]) -> TTSEngine:
     name = (name or "").lower()
-    if name == "qwen3_tts":
-        from .qwen3_tts import Qwen3TTSEngine
-        return Qwen3TTSEngine(engine_config)
     if name == "gpt_sovits":
         from .gpt_sovits import GPTSoVITSEngine
         return GPTSoVITSEngine(engine_config)

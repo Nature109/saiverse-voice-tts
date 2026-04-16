@@ -2,7 +2,21 @@
 
 日付は ISO 8601 形式(JST)。バージョン採番はまだ付与していないため、日付とマージコミットハッシュで識別。
 
-## [Unreleased] — ドキュメント整備
+## [Unreleased]
+
+### Qwen3-TTS エンジン削除
+
+ストリーミング非対応で話し始めに 30 秒程度かかり実用性に欠けるため、メインエンジンから外しました。
+
+- `tools/speak/engine/qwen3_tts.py` 削除
+- `tools/speak/engine/__init__.py` から qwen3_tts ディスパッチ削除
+- `scripts/install_backends.py` から qwen3_tts spec 削除、既定を gpt_sovits に
+- `config/default.json` から qwen3_tts 設定ブロック削除、`default_engine` を gpt_sovits に
+- `playback_worker.py` の既定エンジンフォールバックを gpt_sovits に
+- README / SETUP / ARCHITECTURE / voice_profiles/README / requirements / setup.bat の Qwen3-TTS 記述を整理
+- 履歴は残っているので、必要な場合は過去コミット `ca93ffb` 以前を参照可能
+
+### ドキュメント整備
 
 - README / SETUP / ARCHITECTURE / CHANGELOG を整備
 - Windows 向けワンクリックセットアップ `setup.bat` を追加

@@ -1,7 +1,7 @@
 """Install TTS backend repositories into external/.
 
 Usage:
-    python scripts/install_backends.py [qwen3_tts|gpt_sovits|irodori|all]
+    python scripts/install_backends.py [gpt_sovits|irodori|all]
 
 Clones the upstream repository and downloads required model weights from
 HuggingFace. Each backend has its own directory under external/ and is
@@ -23,12 +23,6 @@ _PACK_ROOT = Path(__file__).resolve().parent.parent
 _EXTERNAL = _PACK_ROOT / "external"
 
 _REPOS = {
-    "qwen3_tts": {
-        "url": "https://github.com/QwenLM/Qwen3-TTS.git",
-        "dir": "Qwen3-TTS",
-        "pip_install": True,
-        "hf_weights": ["Qwen/Qwen3-TTS-12Hz-1.7B-Base"],
-    },
     "gpt_sovits": {
         "url": "https://github.com/RVC-Boss/GPT-SoVITS.git",
         "dir": "GPT-SoVITS",
@@ -164,7 +158,7 @@ def main() -> None:
         "backend",
         choices=list(_REPOS.keys()) + ["all"],
         nargs="?",
-        default="qwen3_tts",
+        default="gpt_sovits",
     )
     args = parser.parse_args()
 

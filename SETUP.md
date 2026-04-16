@@ -215,19 +215,21 @@ mkdir external\GPT-SoVITS\GPT_SoVITS\pretrained_models\fast_langdetect
 
 ## 他のバックエンド
 
-### Qwen3-TTS
+### Irodori-TTS(実験的)
 
 ```batch
-setup.bat qwen3_tts
+setup.bat irodori
 ```
-`registry.json` の `engine` を `qwen3_tts` に変更して使用。ストリーミング非対応のため話し始めが遅く、現時点では GPT-SoVITS を推奨。
+
+本環境での動作検証が完了していないため扱いは実験的です。`registry.json` の `engine` を `irodori` に変更して使用。
 
 ### 全バックエンド一括導入
 
 ```batch
 setup.bat all
 ```
-注意: Qwen3-TTS と GPT-SoVITS は `transformers` バージョン要求が衝突するため、共存運用はできません(後からインストールされた方のバージョンで動作)。
+
+現時点でサポートしているのは GPT-SoVITS と Irodori-TTS の 2 つです。
 
 ## 自動アンインストール
 

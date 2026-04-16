@@ -48,7 +48,7 @@ voice_profiles/
 
 | フィールド | 必須 | 説明 |
 |---|---|---|
-| `engine` | 必須 | `gpt_sovits` / `qwen3_tts` / `irodori` |
+| `engine` | 必須 | `gpt_sovits`(推奨) / `irodori`(実験的) |
 | `ref_audio` | 必須 | `samples/` 以下の相対パス(絶対パスも可) |
 | `ref_text` | 必須 | `ref_audio` の**正確な**書き起こし。句読点まで合わせると品質向上 |
 | `params` | 任意 | エンジン別の生成パラメータ |
@@ -66,17 +66,6 @@ voice_profiles/
 | `overlap_length` | 2 | ストリーミング時のチャンク間オーバーラップ |
 | `min_chunk_length` | 16 | ストリーミング最小チャンク長(semantic token 数) |
 | `fixed_length_chunk` | false | 固定長チャンク(true で速度優先・品質低下) |
-
-#### qwen3_tts
-| キー | 既定値 | 説明 |
-|---|---|---|
-| `language` | `Japanese` | 合成言語 |
-| `max_new_tokens` | 2048 | 最大生成トークン |
-| `do_sample` | true | サンプリング有効化 |
-| `top_k` | 50 | |
-| `top_p` | 1.0 | |
-| `temperature` | 0.9 | |
-| `repetition_penalty` | 1.05 | |
 
 ## 参照音声の準備ガイド
 

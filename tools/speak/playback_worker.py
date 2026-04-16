@@ -206,7 +206,7 @@ class _TTSWorker:
             return
 
         cfg = self._load_config()
-        engine_name = profile.get("engine") or cfg.get("default_engine", "qwen3_tts")
+        engine_name = profile.get("engine") or cfg.get("default_engine", "gpt_sovits")
         try:
             engine = self._get_engine(engine_name)
         except Exception as exc:

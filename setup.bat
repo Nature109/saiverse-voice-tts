@@ -5,7 +5,7 @@ REM
 REM  Usage:
 REM    setup.bat                   - install the default backend (gpt_sovits)
 REM    setup.bat gpt_sovits        - install GPT-SoVITS only
-REM    setup.bat qwen3_tts         - install Qwen3-TTS only
+REM    setup.bat irodori           - install Irodori-TTS (experimental)
 REM    setup.bat all               - install all supported backends
 REM
 REM  This script:
