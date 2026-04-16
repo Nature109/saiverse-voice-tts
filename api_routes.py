@@ -91,17 +91,33 @@ async def get_audio(
         LOGGER.exception("addon_metadata lookup failed for %s", message_id)
         raise HTTPException(status_code=500, detail="metadata lookup failed") from exc
 
-    if not meta or not isinstance(meta, dict) or "audio_path" not in meta:
+    if not meta or not isinstance(meta, dict):
         raise HTTPException(status_code=404, detail="audio not yet available")
 
-    path = Path(str(meta["audio_path"]))
+    # audio_file はバックエンドローカルの WAV ファイルパス。
+    # audio_path はフロント向け URL なのでファイルオープンに使ってはならない。
+    fs_path = meta.get("audio_file")
+    if not fs_path:
+        # 旧バージョン互換: audio_file 未設定だが audio_path が実パスになっている
+        # ケース (生成後にキーを分離する前のデータ) はフォールバックとして許容する。
+        legacy = meta.get("audio_path")
+        if legacy and not str(legacy).startswith("/api/"):
+            fs_path = legacy
+    if not fs_path:
+        raise HTTPException(status_code=404, detail="audio not yet available")
+
+    path = Path(str(fs_path))
     if not path.exists():
         raise HTTPException(status_code=404, detail="audio file missing on disk")
 
+    # filename を渡すと FastAPI が Content-Disposition: attachment をデフォルトで
+    # 付与し、ブラウザが <audio> で再生せずダウンロード扱いしてしまう。
+    # content_disposition_type="inline" を明示してインライン再生可能にする。
     return FileResponse(
         path=str(path),
         media_type="audio/wav",
         filename=path.name,
+        content_disposition_type="inline",
     )
 
 
@@ -117,8 +133,15 @@ async def _stream_body(message_id: str) -> AsyncIterator[bytes]:
             meta = _get_metadata(message_id)
         except Exception:
             meta = None
-        if meta and isinstance(meta, dict) and "audio_path" in meta:
-            path = Path(str(meta["audio_path"]))
+        fs_path = None
+        if meta and isinstance(meta, dict):
+            fs_path = meta.get("audio_file")
+            if not fs_path:
+                legacy = meta.get("audio_path")
+                if legacy and not str(legacy).startswith("/api/"):
+                    fs_path = legacy
+        if fs_path:
+            path = Path(str(fs_path))
             if path.exists():
                 with path.open("rb") as f:
                     while True:

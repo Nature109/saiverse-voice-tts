@@ -39,6 +39,38 @@ def _get_active_message_id() -> Optional[str]:
         return None
 
 
+def _get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
+    """Return UI-driven addon params merged with pack-local defaults.
+
+    Preference order:
+      1. ``saiverse.addon_config.get_params`` (host UI-managed values, with
+         persona-level overrides applied by the host)
+      2. ``config/default.json`` of this pack (legacy / backward compat for
+         SAIVerse builds without the addon framework)
+      3. Hard-coded "enabled, everything on" fallback
+    """
+    cfg = _worker._load_config() if "_worker" in globals() else {}
+    params: Dict[str, Any] = {
+        "_enabled": True,
+        "auto_speak": True,
+        "server_side_playback": bool(cfg.get("server_side_playback", True)),
+        "streaming": bool(cfg.get("streaming", True)),
+    }
+    try:
+        from saiverse.addon_config import get_params  # type: ignore
+        remote = get_params(_ADDON_NAME, persona_id=persona_id)
+        if isinstance(remote, dict):
+            params.update(remote)
+    except Exception as exc:
+        LOGGER.debug("addon_config.get_params unavailable: %s", exc)
+    return params
+
+
+def get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
+    """Public helper for the Tool to inspect effective addon settings."""
+    return _get_effective_params(persona_id)
+
+
 def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     """Register wav metadata and broadcast an audio_ready event to the host.
 
@@ -46,18 +78,36 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     SAIVerse builds). The server-side playback is not affected either way.
     """
     if not message_id:
+        # 本体側で set_active_message_id の配線が抜けていたり、ContextVar が
+        # 伝播しない経路だと毎発話ごとに発火する。アドオン連携が機能しない
+        # 指標となるため WARNING にしておく。
+        LOGGER.warning(
+            "notify_audio_ready skipped: message_id is None. "
+            "Bubble playback button will not be registered for this utterance."
+        )
         return
     audio_path = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+    meta_ok = False
+    event_ok = False
     try:
         from saiverse.addon_metadata import set_metadata  # type: ignore
+        # audio_path: フロントが <audio src=...> に使う URL
         set_metadata(
             message_id=message_id,
             addon_name=_ADDON_NAME,
             key="audio_path",
             value=audio_path,
         )
+        # audio_file: バックエンド配信エンドポイントが実ファイルを開くためのローカルパス
+        set_metadata(
+            message_id=message_id,
+            addon_name=_ADDON_NAME,
+            key="audio_file",
+            value=str(wav_path),
+        )
+        meta_ok = True
     except Exception as exc:
-        LOGGER.debug("set_metadata unavailable: %s", exc)
+        LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
         emit_addon_event(
@@ -66,8 +116,13 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
             message_id=message_id,
             data={"audio_path": audio_path},
         )
+        event_ok = True
     except Exception as exc:
-        LOGGER.debug("emit_addon_event unavailable: %s", exc)
+        LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
+    LOGGER.debug(
+        "notify_audio_ready: msg=%s metadata=%s event=%s",
+        message_id, meta_ok, event_ok,
+    )
 
 
 def _saiverse_home() -> Path:
@@ -289,10 +344,18 @@ class _TTSWorker:
             LOGGER.error("Failed to initialize engine '%s': %s", engine_name, exc)
             return
 
-        use_streaming = cfg.get("streaming", True) and getattr(
+        effective = _get_effective_params(job.persona_id)
+        LOGGER.debug(
+            "effective addon params for persona=%s: streaming=%s server_side=%s enabled=%s",
+            job.persona_id,
+            effective.get("streaming"),
+            effective.get("server_side_playback"),
+            effective.get("_enabled"),
+        )
+        use_streaming = bool(effective.get("streaming", True)) and getattr(
             engine, "supports_streaming", False
         )
-        server_side_playback = bool(cfg.get("server_side_playback", True))
+        server_side_playback = bool(effective.get("server_side_playback", True))
 
         if use_streaming:
             ok = self._play_streaming(
@@ -370,12 +433,17 @@ class _TTSWorker:
         # Capture message_id here: the persona_context is valid at enqueue
         # time (tool invocation) but may be gone by the time the worker
         # thread actually picks up the job.
+        captured_msg_id = _get_active_message_id()
+        LOGGER.debug(
+            "enqueue: job=%s persona=%s message_id=%s",
+            job_id, persona_id, captured_msg_id,
+        )
         self._queue.put(
             _Job(
                 job_id=job_id,
                 persona_id=persona_id,
                 text=text,
-                message_id=_get_active_message_id(),
+                message_id=captured_msg_id,
             )
         )
         return job_id
