@@ -33,8 +33,9 @@ _REPOS = {
         "url": "https://github.com/RVC-Boss/GPT-SoVITS.git",
         "dir": "GPT-SoVITS",
         "pip_install": False,
+        "pip_install_requirements": "requirements.txt",
         "hf_weights": ["lj1995/GPT-SoVITS"],
-        "weights_local_dir": "GPT-SoVITS/GPT_SoVITS/pretrained_models",
+        "weights_local_dir": "external/GPT-SoVITS/GPT_SoVITS/pretrained_models",
     },
     "irodori": {
         "url": "https://github.com/Aratako/Irodori-TTS.git",
@@ -90,6 +91,14 @@ def install(backend: str) -> None:
 
     if spec.get("pip_install"):
         _pip_install_editable(repo_dir)
+
+    req_file = spec.get("pip_install_requirements")
+    if req_file:
+        req_path = repo_dir / req_file
+        if req_path.exists():
+            _run([sys.executable, "-m", "pip", "install", "-r", str(req_path)])
+        else:
+            LOGGER.warning("requirements file not found: %s", req_path)
 
     weights_local = None
     if "weights_local_dir" in spec:
