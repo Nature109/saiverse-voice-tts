@@ -2,6 +2,7 @@
     "default_engine": "gpt_sovits",
     "play_mode": "queue",
     "streaming": true,
+    "server_side_playback": true,
     "output_device": 1,
     "sample_rate": 24000,
     "gc_hours": 24,

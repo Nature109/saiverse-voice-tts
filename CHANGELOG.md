@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### SAIVerse 本体アドオン基盤への連携(experiment/addon-integration)
+
+SAIVerse 本体の `feature/memory-notes-and-organize` ブランチで実装されたアドオン基盤(`ab22842`)に対応。
+
+- `addon.json` 新規作成(マニフェスト):
+  - `name` / `display_name` / `description` / `version`
+  - `params_schema`: `auto_speak` (persona設定可)、`server_side_playback`、`streaming` の3つのトグル
+  - `ui_extensions.bubble_buttons`: フロント側がメッセージバブル内に「音声を再生」ボタンを自動追加。`metadata_key=audio_path` が存在するときのみ表示
+- `api_routes.py` 新規作成(旧 `api_routes.py.stub` を削除):
+  - `GET /audio/{message_id}` 完成wavを `FileResponse` で配信
+  - `GET /audio/{message_id}/stream` 合成進行中のチャンクを HTTP Chunked Transfer で配信
+  - 認証は本体 `saiverse.addon_deps.get_manager` を `Depends()` で差し込み
+- `tools/speak/audio_stream.py` 新規作成:
+  - スレッドセーフな FIFO Queue レジストリ
+  - `open_stream` / `push_chunk` / `close_stream` API
+  - 0xFFFFFFFF サイズヘッダの WAV プレフィックスでブラウザ逐次再生可
+- `tools/speak/playback_worker.py` 改修:
+  - `_get_active_message_id()` で `tools.context.get_active_message_id` を取得
+  - 合成完了時に `saiverse.addon_metadata.set_metadata` と `saiverse.addon_events.emit_addon_event` を呼び出し
+  - `_Job` に `message_id` フィールド追加(enqueue 時点で capture)
+  - `_play_streaming` は `audio_stream.open_stream/push_chunk/close_stream` を並行呼び出しし、同じ音声をサーバ再生と HTTP 配信の両方に流す
+  - `server_side_playback=False` のときサーバ側再生をスキップ(HTTP 配信のみ)
+- `config/default.json` に `server_side_playback: true` を追加
+
+本体側の `addon_metadata` / `addon_events` / `addon_deps` モジュールが未提供の場合は全て警告ログのみで安全に無効化される(下位互換)。
+
 ### Qwen3-TTS エンジン削除
 
 ストリーミング非対応で話し始めに 30 秒程度かかり実用性に欠けるため、メインエンジンから外しました。
