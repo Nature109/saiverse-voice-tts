@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterator, Optional
 
 import numpy as np
 
-from .base import SynthesisResult, TTSEngine
+from .base import SynthesisChunk, SynthesisResult, TTSEngine
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ def _shadowed_tools_namespace() -> Iterator[None]:
 
 class GPTSoVITSEngine(TTSEngine):
     name = "gpt_sovits"
+    supports_streaming = True
 
     def __init__(self, engine_config: Dict[str, Any]):
         super().__init__(engine_config)
@@ -110,6 +111,54 @@ class GPTSoVITSEngine(TTSEngine):
             LOGGER.info("Loading GPT-SoVITS TTS pipeline")
             self._tts = TTS(cfg)
 
+    def _build_inputs(
+        self,
+        text: str,
+        ref_audio: str,
+        ref_text: Optional[str],
+        params: Dict[str, Any],
+        *,
+        streaming: bool,
+    ) -> Dict[str, Any]:
+        inputs: Dict[str, Any] = {
+            "text": text,
+            "text_lang": self._target_language,
+            "ref_audio_path": ref_audio,
+            "prompt_text": ref_text or "",
+            "prompt_lang": self._ref_language,
+            "text_split_method": params.get("text_split_method", "cut5"),
+            "batch_size": 1,
+            "speed_factor": float(params.get("speed", 1.0)),
+            "top_k": int(params.get("top_k", 15)),
+            "top_p": float(params.get("top_p", 1.0)),
+            "temperature": float(params.get("temperature", 1.0)),
+        }
+        if streaming:
+            # GPT-SoVITS streaming mode requires parallel_infer=False and
+            # is unavailable for V3/V4 vocoder models (auto-falls back to
+            # return_fragment). See TTS.run() docstring for details.
+            inputs.update(
+                {
+                    "streaming_mode": True,
+                    "parallel_infer": False,
+                    "return_fragment": False,
+                    "overlap_length": int(params.get("overlap_length", 2)),
+                    "min_chunk_length": int(params.get("min_chunk_length", 16)),
+                    "fixed_length_chunk": bool(params.get("fixed_length_chunk", False)),
+                }
+            )
+        else:
+            inputs["return_fragment"] = False
+        return inputs
+
+    @staticmethod
+    def _normalize_chunk(audio_chunk: Any) -> np.ndarray:
+        if not isinstance(audio_chunk, np.ndarray):
+            audio_chunk = np.asarray(audio_chunk)
+        if audio_chunk.dtype == np.int16:
+            return audio_chunk.astype(np.float32) / 32768.0
+        return audio_chunk.astype(np.float32)
+
     def synthesize(
         self,
         text: str,
@@ -123,20 +172,7 @@ class GPTSoVITSEngine(TTSEngine):
         if not ref_audio:
             raise ValueError("GPT-SoVITS requires ref_audio.")
 
-        inputs: Dict[str, Any] = {
-            "text": text,
-            "text_lang": self._target_language,
-            "ref_audio_path": ref_audio,
-            "prompt_text": ref_text or "",
-            "prompt_lang": self._ref_language,
-            "text_split_method": params.get("text_split_method", "cut5"),
-            "batch_size": 1,
-            "speed_factor": float(params.get("speed", 1.0)),
-            "top_k": int(params.get("top_k", 15)),
-            "top_p": float(params.get("top_p", 1.0)),
-            "temperature": float(params.get("temperature", 1.0)),
-            "return_fragment": False,
-        }
+        inputs = self._build_inputs(text, ref_audio, ref_text, params, streaming=False)
 
         with _cwd(_EXTERNAL_REPO):
             if ref_audio != self._last_ref:
@@ -147,13 +183,7 @@ class GPTSoVITSEngine(TTSEngine):
             sr = 32000
             for sr_chunk, audio_chunk in self._tts.run(inputs):
                 sr = int(sr_chunk)
-                if not isinstance(audio_chunk, np.ndarray):
-                    audio_chunk = np.asarray(audio_chunk)
-                if audio_chunk.dtype == np.int16:
-                    audio_chunk = audio_chunk.astype(np.float32) / 32768.0
-                else:
-                    audio_chunk = audio_chunk.astype(np.float32)
-                chunks.append(audio_chunk)
+                chunks.append(self._normalize_chunk(audio_chunk))
 
         if not chunks:
             raise RuntimeError("GPT-SoVITS produced no audio.")
@@ -161,3 +191,29 @@ class GPTSoVITSEngine(TTSEngine):
         audio = np.concatenate(chunks)
         duration_ms = int(len(audio) / sr * 1000)
         return SynthesisResult(audio=audio, sample_rate=sr, duration_ms=duration_ms)
+
+    def synthesize_stream(
+        self,
+        text: str,
+        ref_audio: Optional[str] = None,
+        ref_text: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[SynthesisChunk]:
+        self._lazy_load()
+        params = params or {}
+
+        if not ref_audio:
+            raise ValueError("GPT-SoVITS requires ref_audio.")
+
+        inputs = self._build_inputs(text, ref_audio, ref_text, params, streaming=True)
+
+        with _cwd(_EXTERNAL_REPO):
+            if ref_audio != self._last_ref:
+                self._tts.set_ref_audio(ref_audio)
+                self._last_ref = ref_audio
+
+            for sr_chunk, audio_chunk in self._tts.run(inputs):
+                yield SynthesisChunk(
+                    audio=self._normalize_chunk(audio_chunk),
+                    sample_rate=int(sr_chunk),
+                )

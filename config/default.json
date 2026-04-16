@@ -1,6 +1,7 @@
 {
     "default_engine": "qwen3_tts",
     "play_mode": "queue",
+    "streaming": true,
     "output_device": 1,
     "sample_rate": 24000,
     "gc_hours": 24,

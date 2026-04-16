@@ -16,6 +16,7 @@ from tools.core import ToolSchema
 from tools.context import get_active_persona_id
 
 from .playback_worker import enqueue_tts
+from .text_cleaner import clean_text_for_tts
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,15 +44,15 @@ def schema() -> ToolSchema:
 
 
 def speak_as_persona(text: str) -> Dict[str, Any]:
-    text = (text or "").strip()
-    if not text:
+    cleaned = clean_text_for_tts(text or "")
+    if not cleaned:
         return {"content": "", "status": "skipped_empty"}
 
     persona_id = get_active_persona_id()
-    job_id = enqueue_tts(text, persona_id)
+    job_id = enqueue_tts(cleaned, persona_id)
     LOGGER.debug(
-        "speak_as_persona enqueued: persona=%s job=%s len=%d",
-        persona_id, job_id, len(text),
+        "speak_as_persona enqueued: persona=%s job=%s len=%d (orig_len=%d)",
+        persona_id, job_id, len(cleaned), len(text or ""),
     )
     return {
         "content": "",
