@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### バブル再生エンドポイント正常化とログの production 整理(experiment/addon-config-consume)
+
+End-to-end で動作確認した結果判明した2点の修正を投入:
+
+- `audio_path` メタデータキーは URL 格納専用とし、バックエンド配信用のファイルシステムパスは新規に `audio_file` キーに分離。従来は同じキーを URL とファイルパスで兼用していたため `api_routes.py` 側で 404 になっていた
+- `FileResponse` の `content_disposition_type="inline"` を明示。デフォルト `attachment` ではブラウザが `<audio>` でインライン再生できなかった
+- 診断用の INFO ログを DEBUG に格下げし、通常運用時のログを静粛化。`message_id=None` による連携失敗のみ WARNING に格上げ
+
 ### アドオン UI トグルを実際に尊重するよう接続(experiment/addon-config-consume)
 
 SAIVerse 本体に `saiverse.addon_config.get_params` / `is_addon_enabled`(コミット `56c344a`)が追加されたため、拡張パック側で読み取って反映するようにした。
