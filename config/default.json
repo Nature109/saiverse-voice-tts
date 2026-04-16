@@ -1,14 +1,14 @@
 {
     "default_engine": "qwen3_tts",
     "play_mode": "queue",
-    "output_device": null,
+    "output_device": 1,
     "sample_rate": 24000,
     "gc_hours": 24,
     "engines": {
         "qwen3_tts": {
-            "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-            "device": "auto",
-            "dtype": "float16"
+            "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+            "device": "cuda:0",
+            "dtype": "bfloat16"
         },
         "gpt_sovits": {
             "api_base": "http://127.0.0.1:9880",

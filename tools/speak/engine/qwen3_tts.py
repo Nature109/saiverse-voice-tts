@@ -92,12 +92,19 @@ class Qwen3TTSEngine(TTSEngine):
         if not ref_audio:
             raise ValueError("Qwen3-TTS voice cloning requires ref_audio.")
 
-        wavs, sr = self._model.generate_voice_clone(
-            text=text,
-            language=params.get("language", "Japanese"),
-            ref_audio=ref_audio,
-            ref_text=ref_text or "",
-        )
+        gen_kwargs: Dict[str, Any] = {
+            "text": text,
+            "language": params.get("language", "Japanese"),
+            "ref_audio": ref_audio,
+            "ref_text": ref_text or "",
+            "max_new_tokens": int(params.get("max_new_tokens", 2048)),
+            "do_sample": bool(params.get("do_sample", True)),
+            "top_k": int(params.get("top_k", 50)),
+            "top_p": float(params.get("top_p", 1.0)),
+            "temperature": float(params.get("temperature", 0.9)),
+            "repetition_penalty": float(params.get("repetition_penalty", 1.05)),
+        }
+        wavs, sr = self._model.generate_voice_clone(**gen_kwargs)
         audio = np.asarray(wavs[0], dtype=np.float32)
         sr = int(sr)
         duration_ms = int(len(audio) / sr * 1000)

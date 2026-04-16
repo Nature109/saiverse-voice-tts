@@ -27,7 +27,7 @@ _REPOS = {
         "url": "https://github.com/QwenLM/Qwen3-TTS.git",
         "dir": "Qwen3-TTS",
         "pip_install": True,
-        "hf_weights": ["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"],
+        "hf_weights": ["Qwen/Qwen3-TTS-12Hz-1.7B-Base"],
     },
     "gpt_sovits": {
         "url": "https://github.com/RVC-Boss/GPT-SoVITS.git",

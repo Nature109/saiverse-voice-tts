@@ -2,7 +2,7 @@
     "_default": {
         "engine": "qwen3_tts",
         "ref_audio": "samples/_default/ref.wav",
-        "ref_text": "これは参照音声のサンプルです。",
+        "ref_text": "彼女はモーツァルトやベートーヴェンといった、古典派の作曲家が好きだ。",
         "params": {
             "speed": 1.0,
             "temperature": 0.7
