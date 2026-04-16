@@ -1,0 +1,42 @@
+{
+    "name": "saiverse-voice-tts",
+    "display_name": "Voice TTS",
+    "description": "GPT-SoVITSによるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
+    "version": "0.1.0",
+    "params_schema": [
+        {
+            "key": "auto_speak",
+            "label": "自動発話",
+            "description": "ペルソナ発話のたびにTTS合成を自動実行します。OFFにすると合成は行わず、バブルの再生ボタンから手動実行のみになります。",
+            "type": "toggle",
+            "default": true,
+            "persona_configurable": true
+        },
+        {
+            "key": "server_side_playback",
+            "label": "サーバー側再生",
+            "description": "バックエンドPCのスピーカーから自動再生します。Tailscale越しのリモート運用では不要になることが多いです。",
+            "type": "toggle",
+            "default": true
+        },
+        {
+            "key": "streaming",
+            "label": "ストリーミング推論",
+            "description": "合成完了を待たずにチャンク単位で逐次再生することで、話し始めまでのレイテンシを短縮します。",
+            "type": "toggle",
+            "default": true
+        }
+    ],
+    "ui_extensions": {
+        "bubble_buttons": [
+            {
+                "id": "play_audio",
+                "icon": "play",
+                "label": "音声を再生",
+                "action": "play_audio",
+                "metadata_key": "audio_path",
+                "show_when": "metadata_exists"
+            }
+        ]
+    }
+}

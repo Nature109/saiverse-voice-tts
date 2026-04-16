@@ -21,11 +21,53 @@ import numpy as np
 
 from .engine import TTSEngine, create_engine
 from .profiles import get_profile
+from . import audio_stream
 
 LOGGER = logging.getLogger(__name__)
 
 _PACK_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG_PATH = _PACK_ROOT / "config" / "default.json"
+_ADDON_NAME = "saiverse-voice-tts"
+
+
+def _get_active_message_id() -> Optional[str]:
+    try:
+        from tools.context import get_active_message_id  # type: ignore
+        mid = get_active_message_id()
+        return str(mid) if mid is not None else None
+    except Exception:
+        return None
+
+
+def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
+    """Register wav metadata and broadcast an audio_ready event to the host.
+
+    Silently degrades if the host's addon framework is unavailable (older
+    SAIVerse builds). The server-side playback is not affected either way.
+    """
+    if not message_id:
+        return
+    audio_path = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+    try:
+        from saiverse.addon_metadata import set_metadata  # type: ignore
+        set_metadata(
+            message_id=message_id,
+            addon_name=_ADDON_NAME,
+            key="audio_path",
+            value=audio_path,
+        )
+    except Exception as exc:
+        LOGGER.debug("set_metadata unavailable: %s", exc)
+    try:
+        from saiverse.addon_events import emit_addon_event  # type: ignore
+        emit_addon_event(
+            addon=_ADDON_NAME,
+            event="audio_ready",
+            message_id=message_id,
+            data={"audio_path": audio_path},
+        )
+    except Exception as exc:
+        LOGGER.debug("emit_addon_event unavailable: %s", exc)
 
 
 def _saiverse_home() -> Path:
@@ -44,6 +86,7 @@ class _Job:
     job_id: str
     persona_id: Optional[str]
     text: str
+    message_id: Optional[str] = None
 
 
 class _TTSWorker:
@@ -103,6 +146,11 @@ class _TTSWorker:
         except Exception as exc:
             LOGGER.error("sounddevice playback failed: %s", exc)
 
+    @staticmethod
+    def _to_int16_bytes(audio_np: np.ndarray) -> bytes:
+        clipped = np.clip(audio_np, -1.0, 1.0)
+        return (clipped * 32767.0).astype(np.int16).tobytes()
+
     def _play_streaming(
         self,
         engine: TTSEngine,
@@ -111,23 +159,36 @@ class _TTSWorker:
         ref_text: Optional[str],
         params: Optional[Dict[str, Any]],
         job_id: str,
+        message_id: Optional[str] = None,
+        server_side_playback: bool = True,
     ) -> bool:
         """Synthesize and play chunk-by-chunk while saving the full wav.
+
+        If ``message_id`` is provided, each chunk is also forwarded to the
+        in-process ``audio_stream`` registry so that the HTTP endpoint
+        ``/api/addon/saiverse-voice-tts/audio/<message_id>/stream`` can serve
+        the same audio to remote clients via HTTP Chunked Transfer.
 
         Returns True on success, False if streaming fell through and caller
         should use the non-streaming fallback.
         """
-        try:
-            import sounddevice as sd  # type: ignore
-        except ImportError:
-            LOGGER.warning("sounddevice not installed; skipping streaming playback.")
-            return True  # nothing to fall back to
+        sd = None
+        if server_side_playback:
+            try:
+                import sounddevice as sd  # type: ignore
+            except ImportError:
+                LOGGER.warning(
+                    "sounddevice not installed; streaming to HTTP only "
+                    "(server-side playback disabled)."
+                )
+                sd = None
 
         cfg = self._load_config()
         device = cfg.get("output_device")
 
         collected: list[np.ndarray] = []
         stream = None
+        http_opened = False
         sample_rate: Optional[int] = None
         first_chunk_at: Optional[float] = None
         t_start = time.time()
@@ -140,24 +201,35 @@ class _TTSWorker:
                     audio_np = audio_np.reshape(-1)
                 if audio_np.size == 0:
                     continue
-                if stream is None:
+                if sample_rate is None:
                     sample_rate = chunk.sample_rate
-                    stream = sd.OutputStream(
-                        samplerate=sample_rate,
-                        channels=1,
-                        device=device,
-                        dtype="float32",
-                    )
-                    stream.start()
+                    if sd is not None:
+                        stream = sd.OutputStream(
+                            samplerate=sample_rate,
+                            channels=1,
+                            device=device,
+                            dtype="float32",
+                        )
+                        stream.start()
+                    if message_id:
+                        audio_stream.open_stream(message_id, sample_rate)
+                        http_opened = True
                     first_chunk_at = time.time()
                     LOGGER.debug(
-                        "TTS first chunk ready after %.2fs (job=%s)",
-                        first_chunk_at - t_start, job_id,
+                        "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
+                        first_chunk_at - t_start, job_id, message_id,
                     )
-                stream.write(audio_np.astype(np.float32, copy=False))
+                if stream is not None:
+                    stream.write(audio_np.astype(np.float32, copy=False))
+                if http_opened:
+                    audio_stream.push_chunk(
+                        message_id, self._to_int16_bytes(audio_np),
+                    )
                 collected.append(audio_np)
         except Exception as exc:
             LOGGER.error("Streaming synthesis/playback failed: %s", exc)
+            if http_opened:
+                audio_stream.close_stream(message_id)
             return False
         finally:
             if stream is not None:
@@ -166,6 +238,9 @@ class _TTSWorker:
                     stream.close()
                 except Exception:
                     pass
+
+        if http_opened:
+            audio_stream.close_stream(message_id)
 
         if not collected or sample_rate is None:
             LOGGER.warning("Streaming produced no audio for job %s", job_id)
@@ -178,6 +253,7 @@ class _TTSWorker:
                 "TTS streamed wav saved: %s (%d ms, total %.2fs)",
                 wav_path, int(len(full) / sample_rate * 1000), time.time() - t_start,
             )
+            _notify_audio_ready(message_id, wav_path)
         except Exception as exc:
             LOGGER.warning("Failed to save streamed wav: %s", exc)
 
@@ -216,6 +292,7 @@ class _TTSWorker:
         use_streaming = cfg.get("streaming", True) and getattr(
             engine, "supports_streaming", False
         )
+        server_side_playback = bool(cfg.get("server_side_playback", True))
 
         if use_streaming:
             ok = self._play_streaming(
@@ -225,6 +302,8 @@ class _TTSWorker:
                 ref_text=profile.get("ref_text"),
                 params=profile.get("params"),
                 job_id=job.job_id,
+                message_id=job.message_id,
+                server_side_playback=server_side_playback,
             )
             if ok:
                 return
@@ -241,13 +320,18 @@ class _TTSWorker:
             LOGGER.error("TTS synthesis failed (engine=%s): %s", engine_name, exc)
             return
 
+        wav_path: Optional[Path] = None
         try:
             wav_path = self._save_wav(result.audio, result.sample_rate, job.job_id)
             LOGGER.debug("TTS wav saved: %s (%d ms)", wav_path, result.duration_ms)
         except Exception as exc:
             LOGGER.warning("Failed to save wav: %s", exc)
 
-        self._play(result.audio, result.sample_rate)
+        if wav_path is not None:
+            _notify_audio_ready(job.message_id, wav_path)
+
+        if server_side_playback:
+            self._play(result.audio, result.sample_rate)
 
     def _run(self) -> None:
         last_gc = 0.0
@@ -283,7 +367,17 @@ class _TTSWorker:
     def enqueue(self, text: str, persona_id: Optional[str]) -> str:
         self.start()
         job_id = uuid.uuid4().hex
-        self._queue.put(_Job(job_id=job_id, persona_id=persona_id, text=text))
+        # Capture message_id here: the persona_context is valid at enqueue
+        # time (tool invocation) but may be gone by the time the worker
+        # thread actually picks up the job.
+        self._queue.put(
+            _Job(
+                job_id=job_id,
+                persona_id=persona_id,
+                text=text,
+                message_id=_get_active_message_id(),
+            )
+        )
         return job_id
 
     def shutdown(self) -> None:
