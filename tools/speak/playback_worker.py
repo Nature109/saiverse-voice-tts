@@ -78,8 +78,15 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
     SAIVerse builds). The server-side playback is not affected either way.
     """
     if not message_id:
+        LOGGER.info(
+            "notify_audio_ready: SKIPPED (message_id=None). "
+            "Host-side set_active_message_id may not be wired or did not "
+            "propagate to this ContextVar scope."
+        )
         return
     audio_path = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+    meta_ok = False
+    event_ok = False
     try:
         from saiverse.addon_metadata import set_metadata  # type: ignore
         set_metadata(
@@ -88,8 +95,9 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
             key="audio_path",
             value=audio_path,
         )
+        meta_ok = True
     except Exception as exc:
-        LOGGER.debug("set_metadata unavailable: %s", exc)
+        LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
         emit_addon_event(
@@ -98,8 +106,13 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
             message_id=message_id,
             data={"audio_path": audio_path},
         )
+        event_ok = True
     except Exception as exc:
-        LOGGER.debug("emit_addon_event unavailable: %s", exc)
+        LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
+    LOGGER.info(
+        "notify_audio_ready: msg=%s audio_path=%s metadata=%s event=%s",
+        message_id, audio_path, meta_ok, event_ok,
+    )
 
 
 def _saiverse_home() -> Path:
@@ -410,12 +423,17 @@ class _TTSWorker:
         # Capture message_id here: the persona_context is valid at enqueue
         # time (tool invocation) but may be gone by the time the worker
         # thread actually picks up the job.
+        captured_msg_id = _get_active_message_id()
+        LOGGER.info(
+            "enqueue: job=%s persona=%s message_id=%s",
+            job_id, persona_id, captured_msg_id,
+        )
         self._queue.put(
             _Job(
                 job_id=job_id,
                 persona_id=persona_id,
                 text=text,
-                message_id=_get_active_message_id(),
+                message_id=captured_msg_id,
             )
         )
         return job_id
