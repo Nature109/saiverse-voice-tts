@@ -103,6 +103,86 @@ class _TTSWorker:
         except Exception as exc:
             LOGGER.error("sounddevice playback failed: %s", exc)
 
+    def _play_streaming(
+        self,
+        engine: TTSEngine,
+        text: str,
+        ref_audio: Optional[str],
+        ref_text: Optional[str],
+        params: Optional[Dict[str, Any]],
+        job_id: str,
+    ) -> bool:
+        """Synthesize and play chunk-by-chunk while saving the full wav.
+
+        Returns True on success, False if streaming fell through and caller
+        should use the non-streaming fallback.
+        """
+        try:
+            import sounddevice as sd  # type: ignore
+        except ImportError:
+            LOGGER.warning("sounddevice not installed; skipping streaming playback.")
+            return True  # nothing to fall back to
+
+        cfg = self._load_config()
+        device = cfg.get("output_device")
+
+        collected: list[np.ndarray] = []
+        stream = None
+        sample_rate: Optional[int] = None
+        first_chunk_at: Optional[float] = None
+        t_start = time.time()
+        try:
+            for chunk in engine.synthesize_stream(
+                text=text, ref_audio=ref_audio, ref_text=ref_text, params=params,
+            ):
+                audio_np = chunk.audio
+                if audio_np.ndim > 1:
+                    audio_np = audio_np.reshape(-1)
+                if audio_np.size == 0:
+                    continue
+                if stream is None:
+                    sample_rate = chunk.sample_rate
+                    stream = sd.OutputStream(
+                        samplerate=sample_rate,
+                        channels=1,
+                        device=device,
+                        dtype="float32",
+                    )
+                    stream.start()
+                    first_chunk_at = time.time()
+                    LOGGER.debug(
+                        "TTS first chunk ready after %.2fs (job=%s)",
+                        first_chunk_at - t_start, job_id,
+                    )
+                stream.write(audio_np.astype(np.float32, copy=False))
+                collected.append(audio_np)
+        except Exception as exc:
+            LOGGER.error("Streaming synthesis/playback failed: %s", exc)
+            return False
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+
+        if not collected or sample_rate is None:
+            LOGGER.warning("Streaming produced no audio for job %s", job_id)
+            return False
+
+        try:
+            full = np.concatenate(collected)
+            wav_path = self._save_wav(full, sample_rate, job_id)
+            LOGGER.debug(
+                "TTS streamed wav saved: %s (%d ms, total %.2fs)",
+                wav_path, int(len(full) / sample_rate * 1000), time.time() - t_start,
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed to save streamed wav: %s", exc)
+
+        return True
+
     def _gc_old_files(self) -> None:
         cfg = self._load_config()
         hours = float(cfg.get("gc_hours", 24))
@@ -132,6 +212,23 @@ class _TTSWorker:
         except Exception as exc:
             LOGGER.error("Failed to initialize engine '%s': %s", engine_name, exc)
             return
+
+        use_streaming = cfg.get("streaming", True) and getattr(
+            engine, "supports_streaming", False
+        )
+
+        if use_streaming:
+            ok = self._play_streaming(
+                engine=engine,
+                text=job.text,
+                ref_audio=profile.get("ref_audio"),
+                ref_text=profile.get("ref_text"),
+                params=profile.get("params"),
+                job_id=job.job_id,
+            )
+            if ok:
+                return
+            LOGGER.info("Streaming failed; falling back to non-streaming synthesis.")
 
         try:
             result = engine.synthesize(
