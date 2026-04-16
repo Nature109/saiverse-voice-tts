@@ -158,12 +158,12 @@ t=N    wav 保存
 ### 2回目以降
 
 ```
-t=0.0  enqueue
-t=0.01 worker: engine 取得(キャッシュ済み)
-t=0.01 engine.synthesize_stream()
-t=0.01 ref_audio キャッシュヒット(同一ペルソナなら set_ref_audio スキップ)
-t=0.5  第一チャンク yield → 再生開始 ← ★話し始め
-t=N    完了
+t=0.0    enqueue
+t=0.01   worker: engine 取得(キャッシュ済み)
+t=0.01   engine.synthesize_stream()
+t=0.01   ref_audio キャッシュヒット(同一ペルソナなら set_ref_audio スキップ)
+t≈0.5〜1 第一チャンク yield → 再生開始 ← ★話し始め(余裕を見て5秒以内が目安)
+t=N      完了
 ```
 
 ## Playbook 統合

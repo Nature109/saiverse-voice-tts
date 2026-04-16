@@ -107,8 +107,8 @@ echo        cd /d "%SAIVERSE_ROOT%"
 echo        .venv\Scripts\activate
 echo        python main.py city_a
 echo   3. Talk to a persona in the browser ^(http://localhost:3000^).
-echo      The first utterance triggers backend model load ^(~10s^); subsequent
-echo      ones start speaking in ^<1s.
+echo      The first utterance triggers backend model load and takes tens of
+echo      seconds. Subsequent ones start speaking within about 5 seconds.
 echo.
 pause
 exit /b 0
