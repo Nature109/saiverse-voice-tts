@@ -83,19 +83,55 @@ class GPTSoVITSEngine(TTSEngine):
         self._ref_language = self.config.get("ref_language", "ja")
         self._target_language = self.config.get("target_language", "ja")
 
+    _torchaudio_patched = False
+
+    @classmethod
+    def _patch_torchaudio_load(cls) -> None:
+        """Monkey-patch ``torchaudio.load`` to fall back to soundfile.
+
+        torchaudio 2.11+ (shipped with torch 2.11 / Python 3.13) deprecated
+        ``set_audio_backend`` and forces torchcodec as the default decoder.
+        torchcodec requires FFmpeg shared libraries (DLLs) which are rarely
+        present on Windows. Rather than requiring users to install FFmpeg,
+        we wrap ``torchaudio.load`` so that any failure (torchcodec missing,
+        DLL not found, etc.) transparently falls back to ``soundfile.read``.
+        """
+        if cls._torchaudio_patched:
+            return
+        cls._torchaudio_patched = True
+        try:
+            import torchaudio  # type: ignore
+            import soundfile as sf  # type: ignore
+            import torch  # type: ignore
+
+            _original = torchaudio.load
+
+            def _patched_load(filepath, *args, **kwargs):
+                try:
+                    return _original(filepath, *args, **kwargs)
+                except Exception:
+                    data, sr = sf.read(str(filepath), dtype="float32")
+                    if data.ndim == 1:
+                        tensor = torch.from_numpy(data).unsqueeze(0)
+                    else:
+                        tensor = torch.from_numpy(data.T)
+                    return tensor, sr
+
+            torchaudio.load = _patched_load
+            LOGGER.debug("torchaudio.load patched with soundfile fallback")
+        except ImportError:
+            pass
+
     def _lazy_load(self) -> None:
         if self._tts is not None:
             return
         _prepare_sys_path()
 
-        # torchaudio が torchcodec バックエンドを使おうとすると、Windows で
-        # FFmpeg DLL 依存の問題が発生する。soundfile バックエンドを強制して回避。
-        try:
-            import torchaudio  # type: ignore
-            if hasattr(torchaudio, "set_audio_backend"):
-                torchaudio.set_audio_backend("soundfile")
-        except Exception:
-            pass
+        # torchaudio 2.11+ (torch 2.11, Python 3.13) では set_audio_backend が
+        # deprecated no-op になり、torchcodec が強制されるが Windows では
+        # FFmpeg DLL 依存で動作しない。torchaudio.load を monkey-patch して
+        # soundfile にフォールバックすることで、torchcodec も FFmpeg も不要にする。
+        self._patch_torchaudio_load()
 
         # GPT-SoVITS reads pretrained_models/... via relative paths, so init
         # must happen with cwd == repo root. We also need to shadow SAIVerse's
