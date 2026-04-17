@@ -3,4 +3,5 @@ __pycache__/
 external/
 voice_profiles/samples/**/*.wav
 !voice_profiles/samples/.gitkeep
+!voice_profiles/samples/_default/.gitkeep
 models/

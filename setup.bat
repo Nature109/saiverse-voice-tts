@@ -126,6 +126,10 @@ echo [OK]
 REM --- 6. Reference audio check ---------------------------------------------
 echo.
 echo [6/6] Checking voice profile...
+if not exist "voice_profiles\samples\_default" (
+    mkdir "voice_profiles\samples\_default"
+    echo [INFO] Created voice_profiles\samples\_default directory
+)
 if not exist "voice_profiles\samples\_default\ref.wav" (
     echo [WARN] voice_profiles\samples\_default\ref.wav not found.
     echo        Place a Japanese reference wav file ^(3s+, 16kHz+ mono^) there and
