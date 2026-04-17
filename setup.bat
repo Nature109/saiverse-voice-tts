@@ -55,7 +55,7 @@ echo [INFO] Target backend(s): !BACKEND!
 
 REM --- 1. Pack-level Python packages ----------------------------------------
 echo.
-echo [1/5] Installing pack-level Python packages...
+echo [1/6] Installing pack-level Python packages...
 python -m pip install --upgrade pip >nul 2>nul
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :err
@@ -63,23 +63,40 @@ echo [OK]
 
 REM --- 2. Backend install (clone + weights + requirements) ------------------
 echo.
-echo [2/5] Running install_backends.py for !BACKEND!...
+echo [2/6] Running install_backends.py for !BACKEND!...
 python scripts\install_backends.py !BACKEND!
 if errorlevel 1 goto :err
 echo [OK]
 
 REM --- 3. Verify CUDA torch -------------------------------------------------
+REM GPT-SoVITS の requirements.txt が CPU 版 torch を上書きインストールする
+REM ことがあるため、Step 2 の後に必ず CUDA 版を確認・再導入する。
 echo.
-echo [3/5] Verifying CUDA availability...
+echo [3/6] Verifying CUDA availability...
 python -c "import torch; print('torch', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"
 if errorlevel 1 (
     echo.
-    echo [WARN] CUDA not available. Reinstalling CUDA-enabled torch cu121...
+    echo [INFO] CUDA not available. Reinstalling CUDA-enabled torch cu121...
     python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+    echo.
+    echo [INFO] Verifying CUDA after reinstall...
     python -c "import torch; print('torch', torch.__version__, 'CUDA:', torch.cuda.is_available())"
+    python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"
+    if errorlevel 1 (
+        echo.
+        echo [WARN] CUDA is still not available after reinstall.
+        echo        GPU acceleration will not work. Possible causes:
+        echo          - NVIDIA GPU driver is not installed ^(run nvidia-smi to check^)
+        echo          - No NVIDIA GPU in this machine
+        echo          - CUDA toolkit version mismatch
+        echo        TTS will run on CPU ^(very slow, not recommended^).
+    ) else (
+        echo [OK] CUDA restored successfully
+    )
+) else (
+    echo [OK] CUDA available
 )
-echo [OK]
 
 REM --- 4. Import playbooks to DB -------------------------------------------
 echo.
@@ -89,7 +106,7 @@ python scripts\import_all_playbooks.py --force
 if errorlevel 1 (
     echo [WARN] Playbook import failed. TTS may not work until playbooks are imported.
 ) else (
-    echo [OK] Playbooks imported (sub_speak with tts_speak node)
+    echo [OK] Playbooks imported ^(sub_speak with tts_speak node^)
 )
 popd
 
