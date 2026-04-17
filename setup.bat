@@ -81,16 +81,28 @@ if errorlevel 1 (
 )
 echo [OK]
 
-REM --- 4. sounddevice smoke test --------------------------------------------
+REM --- 4. Import playbooks to DB -------------------------------------------
 echo.
-echo [4/5] Checking sounddevice output devices...
+echo [4/6] Importing playbooks to database...
+pushd "%SAIVERSE_ROOT%"
+python scripts\import_all_playbooks.py --force
+if errorlevel 1 (
+    echo [WARN] Playbook import failed. TTS may not work until playbooks are imported.
+) else (
+    echo [OK] Playbooks imported (sub_speak with tts_speak node)
+)
+popd
+
+REM --- 5. sounddevice smoke test --------------------------------------------
+echo.
+echo [5/6] Checking sounddevice output devices...
 python -c "import sounddevice as sd; print(sd.query_devices())"
 if errorlevel 1 goto :err
 echo [OK]
 
-REM --- 5. Reference audio check ---------------------------------------------
+REM --- 6. Reference audio check ---------------------------------------------
 echo.
-echo [5/5] Checking voice profile...
+echo [6/6] Checking voice profile...
 if not exist "voice_profiles\samples\_default\ref.wav" (
     echo [WARN] voice_profiles\samples\_default\ref.wav not found.
     echo        Place a Japanese reference wav file ^(3s+, 16kHz+ mono^) there and
