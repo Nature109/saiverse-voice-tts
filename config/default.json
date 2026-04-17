@@ -3,7 +3,7 @@
     "play_mode": "queue",
     "streaming": true,
     "server_side_playback": true,
-    "output_device": 1,
+    "output_device": null,
     "sample_rate": 24000,
     "gc_hours": 24,
     "engines": {
