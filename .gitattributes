@@ -1,0 +1,4 @@
+# Windows batch files must have CRLF line endings to work with cmd.exe.
+# Without this, users with core.autocrlf=false get LF-only .bat files
+# that silently fail to execute.
+*.bat text eol=crlf
