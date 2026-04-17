@@ -36,7 +36,7 @@ _REPOS = {
         "dir": "GPT-SoVITS",
         "pip_install": False,
         "pip_install_requirements": "requirements.txt",
-        "pre_install_pip": ["opencc-python-reimplemented"],
+        "pre_install_pip": ["opencc-python-reimplemented", "torchcodec"],
         "strip_opencc_from_requirements": True,
         "extra_dirs": ["GPT_SoVITS/pretrained_models/fast_langdetect"],
         "hf_weights": ["lj1995/GPT-SoVITS"],
