@@ -88,6 +88,15 @@ class GPTSoVITSEngine(TTSEngine):
             return
         _prepare_sys_path()
 
+        # torchaudio が torchcodec バックエンドを使おうとすると、Windows で
+        # FFmpeg DLL 依存の問題が発生する。soundfile バックエンドを強制して回避。
+        try:
+            import torchaudio  # type: ignore
+            if hasattr(torchaudio, "set_audio_backend"):
+                torchaudio.set_audio_backend("soundfile")
+        except Exception:
+            pass
+
         # GPT-SoVITS reads pretrained_models/... via relative paths, so init
         # must happen with cwd == repo root. We also need to shadow SAIVerse's
         # `tools` package so that GPT-SoVITS's `from tools.audio_sr import ...`
