@@ -12,12 +12,20 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 LOGGER = logging.getLogger("install_backends")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+# Windows + MSVC で C/C++ 拡張をソースビルドする際、CP932 (Shift-JIS) ロケールの
+# 環境だと非 ASCII 文字を含むソースファイルで字句解析が狂いコンパイルエラーになる
+# ケースがある (editdistance, opencc 等)。/utf-8 フラグを MSVC に渡しておくことで
+# Python 3.13+ など wheel が未提供のバージョンでもソースビルドが通るようにする。
+if sys.platform == "win32":
+    os.environ.setdefault("CL", "/utf-8")
 
 _PACK_ROOT = Path(__file__).resolve().parent.parent
 _EXTERNAL = _PACK_ROOT / "external"

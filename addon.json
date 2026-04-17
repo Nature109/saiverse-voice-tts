@@ -2,7 +2,7 @@
     "name": "saiverse-voice-tts",
     "display_name": "Voice TTS",
     "description": "GPT-SoVITSによるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "params_schema": [
         {
             "key": "auto_speak",
@@ -10,6 +10,24 @@
             "description": "ペルソナ発話のたびにTTS合成を自動実行します。OFFにすると合成は行わず、バブルの再生ボタンから手動実行のみになります。",
             "type": "toggle",
             "default": true,
+            "persona_configurable": true
+        },
+        {
+            "key": "ref_audio",
+            "label": "参照音声",
+            "description": "このペルソナの声を再現するための参照音声（3〜10秒推奨）",
+            "type": "file",
+            "accept": "audio/wav,audio/mpeg,audio/flac,audio/ogg",
+            "max_size_mb": 50,
+            "preview": "audio",
+            "persona_configurable": true
+        },
+        {
+            "key": "ref_text",
+            "label": "参照音声の書き起こし",
+            "description": "参照音声で話されている内容を正確に書き起こしたテキスト（句読点含め正確に）",
+            "type": "text",
+            "placeholder": "例: 彼女はモーツァルトやベートーヴェンといった、古典派の作曲家が好きだ。",
             "persona_configurable": true
         },
         {

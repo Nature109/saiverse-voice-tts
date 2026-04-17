@@ -43,6 +43,11 @@ if not exist "%VENV_ACTIVATE%" (
 call "%VENV_ACTIVATE%"
 echo [OK] venv activated
 
+REM --- MSVC UTF-8 workaround -----------------------------------------------
+REM Windows + CP932 環境で C/C++ 拡張のソースビルド時に非 ASCII 文字で
+REM コンパイルエラーになる問題を回避 (editdistance, opencc 等)。
+set "CL=/utf-8"
+
 REM --- Backend selection ----------------------------------------------------
 set "BACKEND=%~1"
 if "!BACKEND!"=="" set "BACKEND=gpt_sovits"
