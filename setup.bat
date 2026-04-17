@@ -104,6 +104,15 @@ if errorlevel 1 (
     echo [OK] CUDA available
 )
 
+REM torchcodec は torch 2.11+ で自動インストールされることがあるが、
+REM Windows では FFmpeg DLL 依存で動作しない。torchaudio は soundfile
+REM バックエンドを使うので torchcodec は不要。入っていたら除去する。
+python -c "import torchcodec" >nul 2>nul
+if not errorlevel 1 (
+    echo [INFO] Removing torchcodec ^(not needed, causes FFmpeg DLL issues on Windows^)...
+    python -m pip uninstall -y torchcodec >nul 2>nul
+)
+
 REM --- 4. Import playbooks to DB -------------------------------------------
 echo.
 echo [4/6] Importing playbooks to database...
