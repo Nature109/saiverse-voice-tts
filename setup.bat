@@ -55,7 +55,7 @@ echo [INFO] Target backend(s): !BACKEND!
 
 REM --- 1. Pack-level Python packages ----------------------------------------
 echo.
-echo [1/6] Installing pack-level Python packages...
+echo [1/7] Installing pack-level Python packages...
 python -m pip install --upgrade pip >nul 2>nul
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :err
@@ -63,16 +63,21 @@ echo [OK]
 
 REM --- 2. Backend install (clone + weights + requirements) ------------------
 echo.
-echo [2/6] Running install_backends.py for !BACKEND!...
+echo [2/7] Running install_backends.py for !BACKEND!...
 python scripts\install_backends.py !BACKEND!
 if errorlevel 1 goto :err
 echo [OK]
+
+REM --- NLTK data (GPT-SoVITS が英語テキスト処理に必要) ---------------------
+echo.
+echo [3/7] Downloading NLTK data...
+python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('cmudict', quiet=True); print('OK')"
 
 REM --- 3. Verify CUDA torch -------------------------------------------------
 REM GPT-SoVITS の requirements.txt が CPU 版 torch を上書きインストールする
 REM ことがあるため、Step 2 の後に必ず CUDA 版を確認・再導入する。
 echo.
-echo [3/6] Verifying CUDA availability...
+echo [4/7] Verifying CUDA availability...
 python -c "import torch; print('torch', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"
 if errorlevel 1 (
@@ -106,7 +111,7 @@ if errorlevel 1 (
 
 REM --- 4. Import playbooks to DB -------------------------------------------
 echo.
-echo [4/6] Importing playbooks to database...
+echo [5/7] Importing playbooks to database...
 pushd "%SAIVERSE_ROOT%"
 python scripts\import_all_playbooks.py --force
 if errorlevel 1 (
@@ -118,14 +123,14 @@ popd
 
 REM --- 5. sounddevice smoke test --------------------------------------------
 echo.
-echo [5/6] Checking sounddevice output devices...
+echo [6/7] Checking sounddevice output devices...
 python -c "import sounddevice as sd; print(sd.query_devices())"
 if errorlevel 1 goto :err
 echo [OK]
 
 REM --- 6. Reference audio check ---------------------------------------------
 echo.
-echo [6/6] Checking voice profile...
+echo [7/7] Checking voice profile...
 if not exist "voice_profiles\samples\_default" (
     mkdir "voice_profiles\samples\_default"
     echo [INFO] Created voice_profiles\samples\_default directory
