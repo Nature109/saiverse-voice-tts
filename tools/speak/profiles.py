@@ -1,7 +1,12 @@
 """Voice profile registry loader.
 
-Maps persona_id to voice profile entry. Falls back to "_default" when a
-persona has no registered profile.
+Maps persona_id to voice profile entry with 3-tier fallback:
+
+    1. AddonPersonaConfig (host UI で設定した参照音声) — 最優先
+    2. voice_profiles/registry.json の該当ペルソナエントリ
+    3. voice_profiles/registry.json の "_default" エントリ
+
+いずれにも無い場合は None を返し、TTS はスキップされる。
 """
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 _PACK_ROOT = Path(__file__).resolve().parent.parent.parent
 _REGISTRY_PATH = _PACK_ROOT / "voice_profiles" / "registry.json"
+_ADDON_NAME = "saiverse-voice-tts"
 
 _cached_registry: Optional[Dict[str, Any]] = None
 
@@ -34,23 +40,83 @@ def _load_registry() -> Dict[str, Any]:
     return _cached_registry
 
 
-def get_profile(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Return the voice profile for persona_id, or _default if not registered.
+def _resolve_ref_audio(ref_audio: Optional[str]) -> Optional[str]:
+    """ref_audio パスを絶対パスに解決する。
 
-    Returns None only if neither the persona nor _default is registered.
-    Resolves ref_audio to an absolute path relative to the pack root.
+    - 絶対パスはそのまま返す
+    - voice_profiles/ 相対パスは pack root から解決
+    - 存在しないパスはそのまま返す（エンジン側でエラーになる）
     """
+    if not ref_audio:
+        return None
+    p = Path(ref_audio)
+    if p.is_absolute():
+        return str(p)
+    resolved = (_PACK_ROOT / "voice_profiles" / ref_audio).resolve()
+    return str(resolved)
+
+
+def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """AddonPersonaConfig から参照音声を取得する（最優先）。
+
+    host 側の saiverse.addon_config.get_params が ref_audio / ref_text を
+    含む場合にのみ有効なプロファイルとして返す。ref_audio が無い場合は
+    None を返し、後続のフォールバックに移る。
+    """
+    if not persona_id:
+        return None
+    try:
+        from saiverse.addon_config import get_params  # type: ignore
+        params = get_params(_ADDON_NAME, persona_id=persona_id)
+        ref_audio = params.get("ref_audio")
+        if not ref_audio:
+            return None
+        ref_text = params.get("ref_text", "")
+        return {
+            "engine": params.get("engine", "gpt_sovits"),
+            "ref_audio": str(ref_audio),
+            "ref_text": ref_text,
+            "params": {
+                k: v for k, v in params.items()
+                if k not in ("_enabled", "ref_audio", "ref_text", "engine",
+                             "auto_speak", "server_side_playback", "streaming")
+            },
+        }
+    except Exception as exc:
+        LOGGER.debug("addon_config unavailable for persona profile: %s", exc)
+        return None
+
+
+def get_profile(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Return the voice profile for persona_id.
+
+    Fallback order:
+        1. AddonPersonaConfig (UI-managed ref_audio/ref_text)
+        2. registry.json[persona_id]
+        3. registry.json["_default"]
+        4. None (TTS skipped)
+    """
+    # Tier 1: AddonPersonaConfig
+    addon_profile = _try_addon_persona_config(persona_id)
+    if addon_profile is not None:
+        addon_profile["ref_audio"] = _resolve_ref_audio(addon_profile.get("ref_audio"))
+        LOGGER.debug("profile source=addon_config persona=%s", persona_id)
+        return addon_profile
+
+    # Tier 2 / 3: registry.json
     registry = _load_registry()
     entry = None
     if persona_id and persona_id in registry:
         entry = dict(registry[persona_id])
+        LOGGER.debug("profile source=registry persona=%s", persona_id)
     elif "_default" in registry:
         entry = dict(registry["_default"])
+        LOGGER.debug("profile source=registry_default persona=%s", persona_id)
+
     if entry is None:
         return None
-    ref = entry.get("ref_audio")
-    if ref and not Path(ref).is_absolute():
-        entry["ref_audio"] = str((_PACK_ROOT / "voice_profiles" / ref).resolve())
+
+    entry["ref_audio"] = _resolve_ref_audio(entry.get("ref_audio"))
     return entry
 
 
