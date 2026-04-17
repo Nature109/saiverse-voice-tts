@@ -1,4 +1,5 @@
 # Windows batch files must have CRLF line endings to work with cmd.exe.
 # Without this, users with core.autocrlf=false get LF-only .bat files
 # that silently fail to execute.
-*.bat text eol=crlf
+# binary 指定で git の改行変換を完全に無効化し、CRLF のまま保存・checkout する。
+*.bat binary
