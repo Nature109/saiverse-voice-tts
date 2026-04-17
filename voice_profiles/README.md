@@ -70,7 +70,7 @@ voice_profiles/
 ## 参照音声の準備ガイド
 
 ### 推奨スペック
-- **長さ**: 3〜10秒(短すぎると声紋抽出失敗、長すぎるとロード時間増)
+- **長さ**: 3秒以上10秒以内（必須。範囲外は合成品質が著しく低下する）
 - **サンプリングレート**: 16kHz 以上、24kHz/48kHz 推奨
 - **チャンネル**: モノラル(ステレオは自動で mono に落ちる場合あり)
 - **形式**: wav(PCM 16bit / 24bit / 32bit float)
@@ -88,8 +88,8 @@ voice_profiles/
 ### 既存音源からの切り出し例(ffmpeg)
 
 ```bash
-# 元動画から 10秒切り出し、16kHz mono wav に変換
-ffmpeg -i source.mp4 -ss 00:01:23 -t 10 -ac 1 -ar 24000 samples/Yui_city_a/ref.wav
+# 元動画から 8秒切り出し、24kHz mono wav に変換（3〜10秒の範囲内で）
+ffmpeg -i source.mp4 -ss 00:01:23 -t 8 -ac 1 -ar 24000 samples/Yui_city_a/ref.wav
 ```
 
 ## ペルソナ ID の確認方法

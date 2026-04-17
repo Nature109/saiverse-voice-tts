@@ -379,7 +379,7 @@ Select-String -Path $log -Pattern "TTS wav saved|TTS streamed wav saved|first ch
 | GPU-Util 0%, VRAM 最小 | CPU で推論している | [CUDA 認識](#cuda-が認識されないcuda-false)を確認 |
 | GPU-Util 30%+, 初回のみ遅い | モデルロード(正常) | 2回目以降は数秒。初回は10-30秒が正常 |
 | 毎回2分以上 | ストリーミング OFF で長文合成 | アドオン設定で「ストリーミング推論」を ON に |
-| 参照音声が30秒以上 | 参照音声が長すぎる | 3〜10秒に切り詰める |
+| 参照音声が10秒超 or 3秒未満 | 長さが範囲外 | 3秒以上10秒以内に切り詰める（必須） |
 
 ### 合成は成功するが音が鳴らない
 
@@ -435,7 +435,7 @@ Select-String -Path $log -Pattern "speak_as_persona enqueued" -Encoding UTF8 | S
 
 **確認ポイント**:
 
-1. **参照音声の長さ**: 3秒未満は声紋抽出が不安定。3〜10秒推奨
+1. **参照音声の長さ**: 3秒以上10秒以内が必須。範囲外は合成品質が著しく低下する
    ```powershell
    python -c "import soundfile as sf; d,sr = sf.read(r'voice_profiles\samples\_default\ref.wav'); print(f'{len(d)/sr:.1f}秒 {sr}Hz')"
    ```

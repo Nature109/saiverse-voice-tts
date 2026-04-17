@@ -30,7 +30,7 @@ setup.bat
 ```
 voice_profiles/samples/_default/ref.wav
 ```
-- 3秒以上、16kHz以上、mono、日本語の肉声
+- **3秒以上10秒以内**（必須）、16kHz以上、mono、日本語の肉声
 - 話速・感情が落ち着いていて背景雑音の無いクリップを推奨
 
 #### 2. 参照テキスト(書き起こし)の調整
@@ -189,7 +189,7 @@ pip install -r external\GPT-SoVITS\requirements.txt
 
 - CUDA がオフ → GPU で動いていない。`nvidia-smi` で VRAM が増えているか確認
 - モデルサイズ過大 → GPT-SoVITS は数十秒以内で完了するはず。その範囲を超えるなら CUDA の問題
-- 参照音声が長すぎる → 3〜10秒程度がベスト
+- 参照音声が3秒未満 or 10秒超 → 3秒以上10秒以内に切り詰めて再配置（必須）
 
 ### fast-langdetect のキャッシュディレクトリエラー
 

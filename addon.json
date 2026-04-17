@@ -15,7 +15,7 @@
         {
             "key": "ref_audio",
             "label": "参照音声",
-            "description": "このペルソナの声を再現するための参照音声（3〜10秒推奨）",
+            "description": "このペルソナの声を再現するための参照音声（3秒以上10秒以内、必須）",
             "type": "file",
             "accept": "audio/wav,audio/mpeg,audio/flac,audio/ogg",
             "max_size_mb": 50,

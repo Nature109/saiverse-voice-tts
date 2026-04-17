@@ -132,7 +132,7 @@ if not exist "voice_profiles\samples\_default" (
 )
 if not exist "voice_profiles\samples\_default\ref.wav" (
     echo [WARN] voice_profiles\samples\_default\ref.wav not found.
-    echo        Place a Japanese reference wav file ^(3s+, 16kHz+ mono^) there and
+    echo        Place a Japanese reference wav file ^(3-10s, 16kHz+ mono^) there and
     echo        update voice_profiles\registry.json with a matching transcription.
 ) else (
     echo [OK] _default ref.wav found.
