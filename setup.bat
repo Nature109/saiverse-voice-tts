@@ -77,8 +77,14 @@ python -c "import torch; print('torch', torch.__version__, 'CUDA:', torch.cuda.i
 python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"
 if errorlevel 1 (
     echo.
-    echo [INFO] CUDA not available. Reinstalling CUDA-enabled torch cu121...
-    python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+    echo [INFO] CUDA not available. Reinstalling CUDA-enabled torch...
+    REM cu128 は Python 3.13+ をサポート。cu121 は 3.12 以下のみ。
+    REM cu128 を先に試し、失敗したら cu121 にフォールバック。
+    python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu128 --force-reinstall 2>nul
+    if errorlevel 1 (
+        echo [INFO] cu128 not available for this Python version, trying cu121...
+        python -m pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+    )
     echo.
     echo [INFO] Verifying CUDA after reinstall...
     python -c "import torch; print('torch', torch.__version__, 'CUDA:', torch.cuda.is_available())"
