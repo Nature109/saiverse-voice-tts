@@ -108,7 +108,23 @@ class GPTSoVITSEngine(TTSEngine):
             else:
                 cfg = TTS_Config("GPT_SoVITS/configs/tts_infer.yaml")
 
-            LOGGER.info("Loading GPT-SoVITS TTS pipeline")
+            # tts_infer.yaml の全セクションで device: cpu がハードコードされている
+            # ため、CUDA が利用可能でも CPU 推論になってしまう。
+            # 上流ファイルを変更せず、ここで cfg を上書きして CUDA を有効化する。
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                cfg.device = "cuda"
+                cfg.is_half = True
+                LOGGER.info("Loading GPT-SoVITS TTS pipeline (CUDA, half precision)")
+            else:
+                cfg.device = "cpu"
+                cfg.is_half = False
+                LOGGER.warning(
+                    "Loading GPT-SoVITS TTS pipeline (CPU, full precision) "
+                    "— inference will be very slow. Install CUDA-enabled torch "
+                    "for GPU acceleration."
+                )
+
             self._tts = TTS(cfg)
 
     def _build_inputs(
