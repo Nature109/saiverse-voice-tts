@@ -170,3 +170,30 @@ async def stream_audio(
         _stream_body(message_id),
         media_type="audio/wav",
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /audio-devices
+# ---------------------------------------------------------------------------
+@router.get("/audio-devices")
+async def list_audio_devices() -> dict:
+    """List host machine audio output devices for the addon UI dropdown.
+
+    Returned format matches the AddonParamSchema `options_endpoint` contract:
+    ``{"options": ["<default>", "0: Speakers (Realtek)", ...]}``.
+    The first entry is always ``"<default>"`` which maps to ``None`` on the
+    backend (= sounddevice's default device).
+    """
+    options: list[str] = ["<default>"]
+    try:
+        import sounddevice as sd  # type: ignore
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            # 出力チャンネルを持つデバイスのみ（入力専用マイクを除外）
+            if int(dev.get("max_output_channels", 0)) <= 0:
+                continue
+            name = str(dev.get("name", f"device{i}")).strip()
+            options.append(f"{i}: {name}")
+    except Exception:
+        LOGGER.exception("failed to enumerate audio devices")
+    return {"options": options}

@@ -43,6 +43,14 @@
             "description": "合成完了を待たずにチャンク単位で逐次再生することで、話し始めまでのレイテンシを短縮します。",
             "type": "toggle",
             "default": true
+        },
+        {
+            "key": "output_device",
+            "label": "出力オーディオデバイス",
+            "description": "サーバー側再生の出力先デバイスを選択します。<default> はOSの既定デバイス。",
+            "type": "dropdown",
+            "default": "<default>",
+            "options_endpoint": "audio-devices"
         }
     ],
     "ui_extensions": {

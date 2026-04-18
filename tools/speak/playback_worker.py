@@ -39,6 +39,37 @@ def _get_active_message_id() -> Optional[str]:
         return None
 
 
+def _parse_output_device(value: Any) -> Optional[int]:
+    """Resolve an output_device value (from addon UI or JSON config) to a
+    ``sounddevice`` device index or None (= OS default).
+
+    Accepted input shapes:
+      - None / "" / "<default>"         → None
+      - int                             → returned as-is
+      - "3"                             → 3
+      - "3: Speakers (Realtek)"         → 3   (UI dropdown format)
+
+    Any unparsable value falls back to None so playback still reaches the
+    OS default device instead of crashing.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # Guard against bool being treated as int (True→1 is almost never intended here).
+        return None
+    if isinstance(value, int):
+        return value
+    s = str(value).strip()
+    if not s or s == "<default>":
+        return None
+    # Leading integer, optionally followed by ":" and label.
+    head = s.split(":", 1)[0].strip()
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
 def _get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
     """Return UI-driven addon params merged with pack-local defaults.
 
@@ -188,16 +219,19 @@ class _TTSWorker:
             wf.writeframes(pcm.tobytes())
         return path
 
-    def _play(self, audio: np.ndarray, sample_rate: int) -> None:
+    def _play(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        output_device: Optional[int] = None,
+    ) -> None:
         try:
             import sounddevice as sd  # type: ignore
         except ImportError:
             LOGGER.warning("sounddevice not installed; skipping playback.")
             return
         try:
-            cfg = self._load_config()
-            device = cfg.get("output_device")
-            sd.play(audio, sample_rate, device=device, blocking=True)
+            sd.play(audio, sample_rate, device=output_device, blocking=True)
         except Exception as exc:
             LOGGER.error("sounddevice playback failed: %s", exc)
 
@@ -216,6 +250,7 @@ class _TTSWorker:
         job_id: str,
         message_id: Optional[str] = None,
         server_side_playback: bool = True,
+        output_device: Optional[int] = None,
     ) -> bool:
         """Synthesize and play chunk-by-chunk while saving the full wav.
 
@@ -238,8 +273,7 @@ class _TTSWorker:
                 )
                 sd = None
 
-        cfg = self._load_config()
-        device = cfg.get("output_device")
+        device = output_device
 
         collected: list[np.ndarray] = []
         stream = None
@@ -357,6 +391,13 @@ class _TTSWorker:
         )
         server_side_playback = bool(effective.get("server_side_playback", True))
 
+        # UI で指定されたデバイス（"<default>" / "3: Realtek..." 等）を優先し、
+        # 未指定なら config/default.json の output_device にフォールバックする。
+        ui_device = effective.get("output_device")
+        resolved_device = _parse_output_device(ui_device)
+        if resolved_device is None:
+            resolved_device = _parse_output_device(cfg.get("output_device"))
+
         if use_streaming:
             ok = self._play_streaming(
                 engine=engine,
@@ -367,6 +408,7 @@ class _TTSWorker:
                 job_id=job.job_id,
                 message_id=job.message_id,
                 server_side_playback=server_side_playback,
+                output_device=resolved_device,
             )
             if ok:
                 return
@@ -394,7 +436,7 @@ class _TTSWorker:
             _notify_audio_ready(job.message_id, wav_path)
 
         if server_side_playback:
-            self._play(result.audio, result.sample_rate)
+            self._play(result.audio, result.sample_rate, output_device=resolved_device)
 
     def _run(self) -> None:
         last_gc = 0.0
