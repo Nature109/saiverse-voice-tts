@@ -33,7 +33,14 @@
         {
             "key": "server_side_playback",
             "label": "サーバー側再生",
-            "description": "バックエンドPCのスピーカーから自動再生します。Tailscale越しのリモート運用では不要になることが多いです。",
+            "description": "バックエンドPCのスピーカーから自動再生します。ブラウザを開いていない環境で音を鳴らしたい場合などにONにします。デフォルトOFF。",
+            "type": "toggle",
+            "default": false
+        },
+        {
+            "key": "client_side_playback",
+            "label": "クライアント側再生",
+            "description": "アクティブクライアントタブのブラウザから自動再生します。Tailscale越し含むすべての環境で共通して使える再生方法。",
             "type": "toggle",
             "default": true
         },
@@ -62,6 +69,18 @@
                 "action": "play_audio",
                 "metadata_key": "audio_path",
                 "show_when": "metadata_exists"
+            }
+        ],
+        "client_actions": [
+            {
+                "id": "auto_play_tts",
+                "event": "audio_ready",
+                "action": "play_audio",
+                "source_metadata_key": "audio_path",
+                "fallback_metadata_key": "audio_stream_url",
+                "requires_active_tab": true,
+                "requires_enabled_param": "client_side_playback",
+                "on_failure_endpoint": "client_action_failed"
             }
         ]
     }

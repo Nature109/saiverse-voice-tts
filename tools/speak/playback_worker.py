@@ -102,22 +102,81 @@ def get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
     return _get_effective_params(persona_id)
 
 
-def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
-    """Register wav metadata and broadcast an audio_ready event to the host.
+def _audio_path(message_id: str) -> str:
+    return f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
 
-    Silently degrades if the host's addon framework is unavailable (older
-    SAIVerse builds). The server-side playback is not affected either way.
+
+def _audio_stream_url(message_id: str) -> str:
+    return f"/api/addon/{_ADDON_NAME}/audio/{message_id}/stream"
+
+
+def _notify_stream_ready(message_id: Optional[str]) -> None:
+    """Broadcast audio_ready at stream open time.
+
+    ストリーミング推論で使用。合成完了を待たずに発火することで、クライアント側
+    再生がレイテンシ少なく話し始められる。event.data には stream URL と
+    最終 URL の両方を含める (executor は stream URL を優先、無ければ audio_path)。
     """
     if not message_id:
-        # 本体側で set_active_message_id の配線が抜けていたり、ContextVar が
-        # 伝播しない経路だと毎発話ごとに発火する。アドオン連携が機能しない
-        # 指標となるため WARNING にしておく。
+        LOGGER.warning(
+            "notify_stream_ready skipped: message_id is None. "
+            "Streaming client-side playback will not be triggered."
+        )
+        return
+    stream_url = _audio_stream_url(message_id)
+    audio_path = _audio_path(message_id)
+    try:
+        from saiverse.addon_metadata import set_metadata  # type: ignore
+        set_metadata(
+            message_id=message_id,
+            addon_name=_ADDON_NAME,
+            key="audio_stream_url",
+            value=stream_url,
+        )
+        # audio_path は合成完了後にファイルへ解決される URL。この時点で metadata
+        # に入れておくと、後続で合成が完了すれば自動でバブル再生でも使える。
+        set_metadata(
+            message_id=message_id,
+            addon_name=_ADDON_NAME,
+            key="audio_path",
+            value=audio_path,
+        )
+    except Exception as exc:
+        LOGGER.warning("notify_stream_ready set_metadata failed for msg=%s: %s", message_id, exc)
+    try:
+        from saiverse.addon_events import emit_addon_event  # type: ignore
+        emit_addon_event(
+            addon=_ADDON_NAME,
+            event="audio_ready",
+            message_id=message_id,
+            data={"audio_stream_url": stream_url, "audio_path": audio_path},
+        )
+    except Exception as exc:
+        LOGGER.warning("emit_addon_event(stream_ready) failed for msg=%s: %s", message_id, exc)
+
+
+def _notify_audio_ready(
+    message_id: Optional[str],
+    wav_path: Path,
+    emit_event: bool = True,
+) -> None:
+    """Register wav metadata and (optionally) broadcast an audio_ready event.
+
+    ``emit_event=False`` はストリーミング合成後のフォローアップ用途。既に
+    ``_notify_stream_ready`` で event を発火済みのため、完成 wav の metadata
+    だけを更新する (audio_file を設定してバブル再生ボタンが正式なファイルを
+    返せるようにする)。
+
+    ``emit_event=True`` (デフォルト) は非ストリーミング経路用。完成時に
+    初めて URL が確定するので、metadata と SSE の両方を発火する。
+    """
+    if not message_id:
         LOGGER.warning(
             "notify_audio_ready skipped: message_id is None. "
             "Bubble playback button will not be registered for this utterance."
         )
         return
-    audio_path = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+    audio_path = _audio_path(message_id)
     meta_ok = False
     event_ok = False
     try:
@@ -139,20 +198,21 @@ def _notify_audio_ready(message_id: Optional[str], wav_path: Path) -> None:
         meta_ok = True
     except Exception as exc:
         LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
-    try:
-        from saiverse.addon_events import emit_addon_event  # type: ignore
-        emit_addon_event(
-            addon=_ADDON_NAME,
-            event="audio_ready",
-            message_id=message_id,
-            data={"audio_path": audio_path},
-        )
-        event_ok = True
-    except Exception as exc:
-        LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
+    if emit_event:
+        try:
+            from saiverse.addon_events import emit_addon_event  # type: ignore
+            emit_addon_event(
+                addon=_ADDON_NAME,
+                event="audio_ready",
+                message_id=message_id,
+                data={"audio_path": audio_path},
+            )
+            event_ok = True
+        except Exception as exc:
+            LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
     LOGGER.debug(
-        "notify_audio_ready: msg=%s metadata=%s event=%s",
-        message_id, meta_ok, event_ok,
+        "notify_audio_ready: msg=%s metadata=%s event=%s (emit=%s)",
+        message_id, meta_ok, event_ok, emit_event,
     )
 
 
@@ -303,6 +363,12 @@ class _TTSWorker:
                     if message_id:
                         audio_stream.open_stream(message_id, sample_rate)
                         http_opened = True
+                        # NOTE: 過去にここで _notify_stream_ready を呼んで早期
+                        # 発火していたが、Next.js Route Handler 側で /audio/ の
+                        # arrayBuffer 展開が入ってる以上、クライアントは結局
+                        # 合成完了まで何も受け取れず、iOS の autoplay unlock が
+                        # 失効するリスクがあるため完了時発火に統一した。
+                        # (audio_ready は後段の _notify_audio_ready で発火する)
                     first_chunk_at = time.time()
                     LOGGER.debug(
                         "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
@@ -342,7 +408,10 @@ class _TTSWorker:
                 "TTS streamed wav saved: %s (%d ms, total %.2fs)",
                 wav_path, int(len(full) / sample_rate * 1000), time.time() - t_start,
             )
-            _notify_audio_ready(message_id, wav_path)
+            # ストリーミング合成でも、クライアント側再生用イベントは完了時に 1 回
+            # だけ発火する (以前の早期発火案は Route Handler のバッファ展開で
+            # 実効差が無く、iOS autoplay unlock 失効リスクのため撤回)。
+            _notify_audio_ready(message_id, wav_path, emit_event=True)
         except Exception as exc:
             LOGGER.warning("Failed to save streamed wav: %s", exc)
 

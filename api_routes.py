@@ -175,6 +175,37 @@ async def stream_audio(
 # ---------------------------------------------------------------------------
 # GET /audio-devices
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# POST /client_action_failed
+# ---------------------------------------------------------------------------
+@router.post("/client_action_failed")
+async def client_action_failed(body: dict) -> dict:
+    """Client action executor failure webhook.
+
+    Called by the host when a browser-side action executor rejects (autoplay
+    拒否、ネットワーク失敗等)。payload は {"action_id", "event",
+    "error_reason", "message_id"}。
+
+    現状は WARN ログに残すのみ。将来的にバブル再生ボタンを目立たせる等の
+    フィードバック機構を足す場合はここに反応ロジックを書く。
+    """
+    try:
+        action_id = body.get("action_id")
+        event_name = body.get("event")
+        reason = body.get("error_reason")
+        message_id = body.get("message_id")
+        LOGGER.warning(
+            "client_action_failed: action=%s event=%s msg=%s reason=%s",
+            action_id, event_name, message_id, reason,
+        )
+    except Exception:
+        LOGGER.exception("client_action_failed: failed to parse body")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# GET /audio-devices
+# ---------------------------------------------------------------------------
 @router.get("/audio-devices")
 async def list_audio_devices() -> dict:
     """List host machine audio output devices for the addon UI dropdown.
