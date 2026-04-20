@@ -59,14 +59,38 @@ def _get_manager_dep() -> Any:
         return _noop
 
 
-# Import the stream registry from the tools tree. We guard the import so
-# that ``router`` is still usable even if the tool subpackage is not on the
-# path (e.g. for type checks or route documentation).
-try:
-    from tools.speak.audio_stream import get_queue  # type: ignore
-except Exception:  # pragma: no cover
-    def get_queue(message_id: str) -> Any:  # type: ignore[misc]
+# Import the stream registry from the tools tree. SAIVerse の tool loader は
+# サブディレクトリのツール (speak/schema.py) を ``tools._loaded.<subdir>``
+# という名前空間で sys.modules に登録するので、同じ audio_stream モジュール
+# インスタンスを参照するためにこの絶対パスで import する必要がある。
+#
+# ``tools.speak.audio_stream`` ではホストの tools パッケージ下に存在しないため
+# 常に ImportError になり、stub fallback の ``get_queue`` が常に None を返して
+# しまい、結果として /audio/{id}/stream エンドポイントが live-queue を見失って
+# 404 相当の挙動になる (既知のバグ修正)。
+def _audio_stream_module() -> Any:
+    """Resolve the live audio_stream module instance at call time.
+
+    Tool loader registers under ``tools._loaded.speak.audio_stream``; using
+    sys.modules lookup avoids stale import references if the module is
+    reloaded during dev.
+    """
+    import sys
+    return sys.modules.get("tools._loaded.speak.audio_stream")
+
+
+def subscribe_stream(message_id: str) -> Any:
+    mod = _audio_stream_module()
+    if mod is None:
         return None
+    return mod.subscribe(message_id)
+
+
+def has_active_stream(message_id: str) -> bool:
+    mod = _audio_stream_module()
+    if mod is None:
+        return False
+    return bool(mod.has_stream(message_id))
 
 
 router = APIRouter()
@@ -125,32 +149,20 @@ async def get_audio(
 # GET /audio/{message_id}/stream
 # ---------------------------------------------------------------------------
 async def _stream_body(message_id: str) -> AsyncIterator[bytes]:
-    """Yield WAV bytes from the in-process stream registry as they arrive."""
-    q = get_queue(message_id)
+    """Yield MP3 bytes from the in-process broadcast stream as they arrive.
+
+    Each call to this generator subscribes a new private consumer queue to
+    the broadcast. The queue is seeded with frames already emitted so that
+    multiple clients (browser + retry + curl 等) can all replay the full
+    stream from the start.
+    """
+    q = subscribe_stream(message_id)
     if q is None:
-        # Maybe the wav is already fully saved; fall back to completed wav.
-        try:
-            meta = _get_metadata(message_id)
-        except Exception:
-            meta = None
-        fs_path = None
-        if meta and isinstance(meta, dict):
-            fs_path = meta.get("audio_file")
-            if not fs_path:
-                legacy = meta.get("audio_path")
-                if legacy and not str(legacy).startswith("/api/"):
-                    fs_path = legacy
-        if fs_path:
-            path = Path(str(fs_path))
-            if path.exists():
-                with path.open("rb") as f:
-                    while True:
-                        buf = f.read(64 * 1024)
-                        if not buf:
-                            break
-                        yield buf
-                return
-        raise HTTPException(status_code=404, detail="no active stream")
+        # Race: stream was discarded between the pre-check in stream_audio
+        # and this generator starting. End the stream so the client retries
+        # via the non-streaming audio_path URL.
+        LOGGER.warning("[stream_body] msg=%s stream no longer available", message_id)
+        return
 
     loop = asyncio.get_event_loop()
     while True:
@@ -165,10 +177,27 @@ async def stream_audio(
     message_id: str,
     manager: Any = Depends(_get_manager_dep()),
 ) -> StreamingResponse:
-    """Chunked WAV stream consumed live while synthesis is in progress."""
+    """Chunked MP3 stream consumed live while synthesis is in progress.
+
+    MP3 (audio/mpeg) is used instead of WAV because:
+      - Progressive WAV requires a ``data`` chunk size upfront; the
+        0xFFFFFFFF "unknown size" hack is rejected by iOS Safari and some
+        Chrome versions with "The operation is not supported".
+      - MP3 is a pure concatenation of frames with no container-level size
+        requirement, so chunked transfer works natively in all browsers.
+
+    If no stream is open for this message_id (合成完了後 or 合成未開始),
+    returns 404 so the client falls back to the non-streaming audio_path
+    URL which serves the completed WAV file.
+    """
+    if not has_active_stream(message_id):
+        raise HTTPException(
+            status_code=404,
+            detail="no active stream (use /audio/{message_id} for completed file)",
+        )
     return StreamingResponse(
         _stream_body(message_id),
-        media_type="audio/wav",
+        media_type="audio/mpeg",
     )
 
 

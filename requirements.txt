@@ -3,6 +3,12 @@ numpy>=1.24
 sounddevice>=0.4.6
 soundfile>=0.12
 huggingface_hub>=0.20
+# MP3 encoder for progressive streaming to clients. PyPI ships precompiled
+# wheels that bundle libmp3lame so no system library installation is required.
+# Used to encode PCM chunks into MP3 frames on the fly for the
+# /audio/{message_id}/stream endpoint (browsers reject progressive WAV with
+# 0xFFFFFFFF header on iOS Safari / some Chromes).
+lameenc>=1.5
 
 # TTS backends are installed separately by setup.bat / install_backends.py.
 # Each backend clones its upstream repository into external/ and (where

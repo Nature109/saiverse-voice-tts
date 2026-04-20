@@ -363,12 +363,11 @@ class _TTSWorker:
                     if message_id:
                         audio_stream.open_stream(message_id, sample_rate)
                         http_opened = True
-                        # NOTE: 過去にここで _notify_stream_ready を呼んで早期
-                        # 発火していたが、Next.js Route Handler 側で /audio/ の
-                        # arrayBuffer 展開が入ってる以上、クライアントは結局
-                        # 合成完了まで何も受け取れず、iOS の autoplay unlock が
-                        # 失効するリスクがあるため完了時発火に統一した。
-                        # (audio_ready は後段の _notify_audio_ready で発火する)
+                        # ストリーム開始直後に audio_ready を発火する。Route Handler
+                        # 側で /stream エンドポイントは arrayBuffer バッファ展開を
+                        # スキップして素通しするようになったため、クライアントは
+                        # ここからチャンクを progressive に受け取って早期再生できる。
+                        _notify_stream_ready(message_id)
                     first_chunk_at = time.time()
                     LOGGER.debug(
                         "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
@@ -408,10 +407,10 @@ class _TTSWorker:
                 "TTS streamed wav saved: %s (%d ms, total %.2fs)",
                 wav_path, int(len(full) / sample_rate * 1000), time.time() - t_start,
             )
-            # ストリーミング合成でも、クライアント側再生用イベントは完了時に 1 回
-            # だけ発火する (以前の早期発火案は Route Handler のバッファ展開で
-            # 実効差が無く、iOS autoplay unlock 失効リスクのため撤回)。
-            _notify_audio_ready(message_id, wav_path, emit_event=True)
+            # ストリーミング経路は _notify_stream_ready で先に audio_ready を
+            # 発火済み。ここでは完成 wav の metadata (audio_file) だけ更新し、
+            # event の重複発火を避ける。
+            _notify_audio_ready(message_id, wav_path, emit_event=False)
         except Exception as exc:
             LOGGER.warning("Failed to save streamed wav: %s", exc)
 

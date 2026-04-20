@@ -76,8 +76,8 @@
                 "id": "auto_play_tts",
                 "event": "audio_ready",
                 "action": "play_audio",
-                "source_metadata_key": "audio_path",
-                "fallback_metadata_key": "audio_stream_url",
+                "source_metadata_key": "audio_stream_url",
+                "fallback_metadata_key": "audio_path",
                 "requires_active_tab": true,
                 "requires_enabled_param": "client_side_playback",
                 "on_failure_endpoint": "client_action_failed"
