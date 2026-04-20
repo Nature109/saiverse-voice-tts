@@ -15,37 +15,50 @@ setup.bat
 
 | ステップ | 内容 |
 |---|---|
-| 1/5 | パック依存(numpy, sounddevice, soundfile, huggingface_hub)を SAIVerse の `.venv` にインストール |
+| 1/5 | パック依存 (numpy, sounddevice, soundfile, huggingface_hub, **lameenc**) を SAIVerse の `.venv` にインストール |
 | 2/5 | `scripts/install_backends.py` 呼び出し — GPT-SoVITS を clone、上流 requirements.txt から `opencc` を自動除外、`opencc-python-reimplemented` 代替導入、重み(約4GB)を HuggingFace から DL、`fast_langdetect` キャッシュディレクトリ作成 |
 | 3/5 | `torch.cuda.is_available()` を確認し、CPU 版 torch が入っていれば `cu121` の CUDA 版を強制再導入 |
-| 4/5 | `sounddevice.query_devices()` で出力デバイスを列挙(音を鳴らすデバイスの選択用) |
+| 4/5 | `sounddevice.query_devices()` で出力デバイスを列挙(サーバー側再生時のデバイス選択用) |
 | 5/5 | `voice_profiles/samples/_default/ref.wav` の有無を確認 |
 
 所要時間: GPU環境で 5〜15分(重みDL律速)。
+
+> `lameenc` は PCM → MP3 エンコードに使用 (progressive 配信用)。PyPI の wheel に libmp3lame がバンドルされているため、Windows でも追加システム依存は不要です。
 
 ### セットアップ完了後の手動作業
 
 #### 1. 参照音声の配置
 
+**方法 A: アドオン管理 UI からアップロード (推奨)**
+
+SAIVerse 起動後、ブラウザで:
+1. サイドバー → アドオン管理 → Voice TTS を展開
+2. 「ペルソナ別設定」のプルダウンから対象ペルソナを選択
+3. 「参照音声」にファイルをドラッグ&ドロップ or クリックしてアップロード
+4. 「参照音声の書き起こし」に wav の内容を正確に入力
+
+**方法 B: ファイル直置き**
+
 ```
 voice_profiles/samples/_default/ref.wav
 ```
-- **3秒以上10秒以内**（必須）、16kHz以上、mono、日本語の肉声
+- **3秒以上10秒以内**(必須)、16kHz以上、mono、日本語の肉声
 - 話速・感情が落ち着いていて背景雑音の無いクリップを推奨
 
 #### 2. 参照テキスト(書き起こし)の調整
 
-`voice_profiles/registry.json` を開き、`_default.ref_text` を配置した wav の**正確な**書き起こしに差し替え。句読点まで含めて合わせると品質が向上します。
+アドオン UI でアップロードした場合は UI の「参照音声の書き起こし」欄に入力。ファイル直置きの場合は `voice_profiles/registry.json` の `_default.ref_text` を wav の**正確な**書き起こしに差し替え。句読点まで含めて合わせると品質が向上します。
 
-#### 3. 出力デバイスの指定(必要時)
+#### 3. 再生方式の選択
 
-`setup.bat` の [4/5] でデバイス一覧が表示されます。`<` マークが既定出力。既定出力でない別デバイスに音を流したい場合は `config/default.json` の `output_device` に番号を指定。
+アドオン管理 UI の Voice TTS セクション:
 
-```json
-{
-    "output_device": 7   // 例: Realtek HD Audio output
-}
-```
+| 項目 | 既定 | 変更するケース |
+|---|---|---|
+| クライアント側再生 | **ON** | 常に ON で OK (Tailscale 含む全環境で動作) |
+| サーバー側再生 | **OFF** | バックエンド PC のスピーカーから直接鳴らしたい時 |
+| 出力オーディオデバイス | `<default>` | サーバー側再生で既定以外のデバイスに出したい時 |
+| ストリーミング推論 | ON | 低レイテンシ優先。OFF だと合成完了後に一括再生 |
 
 #### 4. SAIVerse 起動
 
@@ -56,12 +69,23 @@ python main.py city_a
 ```
 
 別ターミナルで Next.js フロント:
+
+**モバイル / Tailscale 運用する場合は production build を推奨**:
+```batch
+cd %USERPROFILE%\SAIVerse\frontend
+npm run build
+npm run start
+```
+
+**開発時 (dev mode)**:
 ```batch
 cd %USERPROFILE%\SAIVerse\frontend
 npm run dev
 ```
 
-ブラウザで `http://localhost:3000` → 適当なペルソナに話しかけると音声が鳴ります。
+> **dev mode vs production の違いについて**: `npm run dev` はホットリロード等の開発用機能でオーバーヘッドが大きく、iOS Safari が SAIVerse タブを自動破棄する事象が観測されています。モバイルから利用する運用では必ず `npm run build && npm run start` を使ってください。
+
+ブラウザで `http://localhost:3000` → 適当なペルソナに話しかけると音声が鳴ります。Tailscale 越しの場合は割り当てられた `*.ts.net` ホスト名で。
 
 ## 詳細セットアップ(手動)
 
@@ -87,6 +111,13 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 cd %USERPROFILE%\SAIVerse\expansion_data\saiverse-voice-tts
 python -m pip install -r requirements.txt
 ```
+
+`requirements.txt` の主な内容:
+- `numpy>=1.24`
+- `sounddevice>=0.4.6` — サーバー側スピーカー再生
+- `soundfile>=0.12` — wav 入出力
+- `huggingface_hub>=0.20` — 重みダウンロード
+- `lameenc>=1.5` — PCM → MP3 progressive エンコーダ (クライアント配信)
 
 ### 2. GPT-SoVITS の clone + 重み DL + 依存
 
@@ -127,91 +158,48 @@ python -c "import sys, os; sys.path.insert(0, r'%CD%\external\GPT-SoVITS'); sys.
 
 ## トラブルシューティング
 
+代表的なハマりどころのみ記載。詳細は [TROUBLESHOOTING.md](TROUBLESHOOTING.md) を参照してください。
+
 ### opencc のビルドエラー
 
-```
-error: Building wheel for opencc ... [WinError 5] アクセスが拒否されました。
-```
-
-`install_backends.py` が自動で `opencc` をコメントアウト + `opencc-python-reimplemented` に差し替えるため、最新版なら発生しません。もし発生したら `scripts/install_backends.py` の `strip_opencc_from_requirements` が True になっているか確認。
+`install_backends.py` が自動で `opencc` をコメントアウト + `opencc-python-reimplemented` に差し替えるため、最新版なら発生しません。詳細は TROUBLESHOOTING.md。
 
 ### CUDA が認識されない(`CUDA: False`)
 
-原因候補(多い順):
-1. **CPU版 torch が上書きインストールされた**(GPT-SoVITS 依存が連れてきた)
-2. NVIDIA ドライバが古い / インストールされていない
-3. WSL / コンテナ内で実行していて GPU が見えていない
-
-対処:
+最多原因は「GPT-SoVITS 依存が CPU 版 torch を上書きインストールした」:
 ```batch
 nvidia-smi                 REM GPU が見えるか
 pip show torch             REM +cu121 などのサフィックスを確認
 pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
 ```
 
-### `ModuleNotFoundError: No module named 'ffmpeg'` 等
-
-GPT-SoVITS の requirements.txt のインストールが途中で止まっている可能性。再実行:
-```batch
-pip install -r external\GPT-SoVITS\requirements.txt
-```
-
-### `ModuleNotFoundError: No module named 'sounddevice'`
+### `ModuleNotFoundError: No module named 'lameenc'`
 
 ```batch
-pip install sounddevice
+pip install lameenc
 ```
 
 ### DLL ロード中のアクセス拒否
 
-```
-ERROR: Could not install packages due to an OSError: [WinError 5] ...
-```
-別の Python プロセスが当該 DLL を掴んでいるのが原因。SAIVerse バックエンドを停止 → 再インストール:
+別の Python プロセスが当該 DLL を掴んでいるのが原因:
 ```batch
-REM SAIVerse 停止後
-Get-Process python | Stop-Process -Force    REM 注意: 全 python が止まる
+Get-Process python | Stop-Process -Force
 pip install -r external\GPT-SoVITS\requirements.txt
 ```
 
-### 音が鳴らない
+### モバイルで音が鳴らない / タブがリロードされる
 
-1. `TTS wav saved: ...` のログが出ているか確認(出ていれば合成は成功)
-2. `sounddevice.query_devices()` で既定出力を確認
-3. リモートデスクトップ運用なら既定は「リモート オーディオ」になるので適切
-4. ローカル PC のスピーカーに鳴らしたいのに「リモート オーディオ」が既定なら `output_device` を明示
-5. wav 自体を既定プレイヤーで開いて音があるか確認:
-   ```batch
-   start %USERPROFILE%\.saiverse\user_data\voice\out\<最新>.wav
-   ```
-
-### 合成が極端に遅い(2分以上)
-
-- CUDA がオフ → GPU で動いていない。`nvidia-smi` で VRAM が増えているか確認
-- モデルサイズ過大 → GPT-SoVITS は数十秒以内で完了するはず。その範囲を超えるなら CUDA の問題
-- 参照音声が3秒未満 or 10秒超 → 3秒以上10秒以内に切り詰めて再配置（必須）
-
-### fast-langdetect のキャッシュディレクトリエラー
-
-```
-TTS synthesis failed (engine=gpt_sovits): fast-langdetect: Cache directory not found: ...\fast_langdetect
-```
-`install_backends.py` の最新版では自動作成されます。旧版で発生した場合:
+Next.js を **production build** で起動しているか確認:
 ```batch
-mkdir external\GPT-SoVITS\GPT_SoVITS\pretrained_models\fast_langdetect
+cd %USERPROFILE%\SAIVerse\frontend
+npm run build
+npm run start
 ```
+dev mode はモバイル Safari でタブ自動破棄される事象あり。詳細は TROUBLESHOOTING.md。
 
-### Tailscale 越しで音が鳴らない(リモートクライアント)
+### 初回の音声が鳴らない
 
-現状、バックエンド PC のスピーカー出力のみ対応しています。リモートクライアントへの音声配信は、本体側のアドオンフレームワーク(開発中)と連携して将来対応予定です。バックエンド PC の出力先を「リモート オーディオ」に設定すれば、RDP 接続中のクライアントで鳴らすことは可能です:
-
-```json
-// config/default.json
-{
-    "output_device": 1  // "リモート オーディオ" のデバイス番号
-}
-```
-設定後 SAIVerse を再起動。
+モバイルブラウザの autoplay ポリシーで、最初のユーザー操作前は音声再生が拒否される。**SAIVerse の画面を 1 回タップ**してからペルソナに話しかけると鳴ります。詳細は TROUBLESHOOTING.md。
 
 ## 他のバックエンド
 
@@ -231,7 +219,7 @@ setup.bat all
 
 現時点でサポートしているのは GPT-SoVITS と Irodori-TTS の 2 つです。
 
-## 自動アンインストール
+## アンインストール
 
 ```batch
 rmdir /S /Q external
@@ -239,5 +227,5 @@ del /Q voice_profiles\samples\_default\ref.wav
 ```
 パック Python 依存は SAIVerse の `.venv` に残ります(他用途との共有のため)。完全削除は:
 ```batch
-pip uninstall -y sounddevice soundfile opencc-python-reimplemented
+pip uninstall -y sounddevice soundfile opencc-python-reimplemented lameenc
 ```

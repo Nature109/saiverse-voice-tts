@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+### アドオン管理 UI のペルソナ別設定をプルダウン方式に変更(feature/addon-persona-selector-ui)
+
+ペルソナ数が増えるとアコーディオン並列表示が縦に伸びすぎて操作しづらかったため、プルダウンで対象ペルソナを選んで設定する方式に変更(案C)。
+
+- ペルソナごとのアコーディオンを廃止し、プルダウン選択 + 選択ペルソナの設定フォームのみ表示
+- プルダウン横の削除ボタンを撤去(誤操作防止、削除は本体のペルソナ管理画面から)
+- 共通設定に「出力オーディオデバイス」ドロップダウンを追加(`GET /audio-devices` から取得)
+- 「サーバー側再生」の既定値を **OFF** に変更(Tailscale/リモート運用が既定想定になったため)
+- 「クライアント側再生」の既定値は **ON**
+
+### 長時間音声再生の途中停止問題を解消(fix/audio-range-200)
+
+2〜3 分の発話で `/stream` または `/audio` が途中で切れる不具合を修正。
+
+- `/audio` GET: Range ヘッダを剥がして 200 OK で全量返す挙動に変更(Chrome の progressive 再生時に Content-Length 検証で切断する問題を回避)
+- `/stream` GET: Next.js Route Handler を arrayBuffer 経由から pump 転送に変更(長時間合成で HTTP タイムアウトする問題を回避)
+- 同時にブラウザ側バッファ展開で途中停止を救済
+
+### クライアント側再生 + MP3 progressive 配信(feature/client-playback-actions)
+
+Tailscale 越しのリモートブラウザから音声が鳴るようになり、モバイル運用に対応。
+
+- **汎用 `ui_extensions.client_actions` 機構**を拡張パック基盤に追加(本体側):
+  - `addon.json` で SSE イベント → クライアント側 JS executor を宣言的に接続
+  - Voice TTS 専用ではなく、他のパックからも利用可能
+  - `requires_active_tab` / `requires_enabled_param` / `on_failure_endpoint` を宣言で制御
+- **`play_audio` action executor**(本体側): 宣言ベースで `<audio>` 要素を制御、primary/fallback URL、iOS Safari autoplay unlock、再生トークンによる連続発話対応
+- **アクティブクライアントタブ自動判定**(本体側): BroadcastChannel + 最後の操作時刻で、複数タブ/端末間で「最後に触った端末のみが鳴る」動作(ヘッダーの Radio アイコンで可視化)
+- **MP3 progressive 配信に変更**:
+  - `tools/speak/audio_stream.py` を FIFO Queue から pub/sub パターンに刷新
+  - `lameenc` で PCM → MP3 エンコード(Windows でも追加システム依存不要)
+  - 複数コンシューマ同時接続時のチャンク欠落を解消
+  - 新規 subscriber に既存フレームを seed で先入れ
+  - iOS Safari が WAV の 0xFFFFFFFF ヘッダを拒否する問題を回避
+- **Route Handler `/api/addon/[...path]`**(本体側): `/stream` を arrayBuffer バイパスで pump 転送、音声/動画 GET は Range を剥がす
+- `addon.json` に `ui_extensions.client_actions` 宣言と `client_side_playback` トグルを追加
+- `api_routes.py` に `POST /client_action_failed` を追加(フロント再生失敗時のテレメトリ)
+- `requirements.txt` に `lameenc>=1.5` を追加
+
+**既知の制限**: Next.js dev mode では iOS Safari がタブを discard するため、モバイル運用時は `npm run build && npm run start` が必須。
+
 ### バブル再生エンドポイント正常化とログの production 整理(experiment/addon-config-consume)
 
 End-to-end で動作確認した結果判明した2点の修正を投入:
