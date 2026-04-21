@@ -12,8 +12,12 @@
             "target_language": "ja"
         },
         "irodori": {
-            "model_path": null,
-            "device": "auto"
+            "checkpoint": "Aratako/Irodori-TTS-500M-v2",
+            "codec_repo": "Aratako/Semantic-DACVAE-Japanese-32dim",
+            "device": "cuda",
+            "model_precision": "fp32",
+            "codec_device": "cpu",
+            "codec_precision": "fp32"
         }
     }
 }
