@@ -1,8 +1,8 @@
 {
     "name": "saiverse-voice-tts",
     "display_name": "Voice TTS",
-    "description": "GPT-SoVITSによるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
-    "version": "0.2.0",
+    "description": "GPT-SoVITS / Irodori-TTS によるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
+    "version": "0.3.0",
     "params_schema": [
         {
             "key": "auto_speak",
@@ -13,9 +13,18 @@
             "persona_configurable": true
         },
         {
+            "key": "engine",
+            "label": "TTS エンジン",
+            "description": "このペルソナで使用する音声合成エンジン。gpt_sovits は高速ストリーミングと高品質で既定。irodori は別の声質傾向を試したいとき (疑似ストリーミング対応、RTF ~0.3x、NVIDIA GPU 必須)。未選択時は gpt_sovits。",
+            "type": "dropdown",
+            "default": "gpt_sovits",
+            "options": ["gpt_sovits", "irodori"],
+            "persona_configurable": true
+        },
+        {
             "key": "ref_audio",
             "label": "参照音声",
-            "description": "このペルソナの声を再現するための参照音声（3秒以上10秒以内、必須）",
+            "description": "このペルソナの声を再現するための参照音声（3秒以上10秒以内、必須）。gpt_sovits / irodori 共通で同じ wav を使用可能。",
             "type": "file",
             "accept": "audio/wav,audio/mpeg,audio/flac,audio/ogg",
             "max_size_mb": 50,
@@ -25,7 +34,7 @@
         {
             "key": "ref_text",
             "label": "参照音声の書き起こし",
-            "description": "参照音声で話されている内容を正確に書き起こしたテキスト（句読点含め正確に）",
+            "description": "参照音声で話されている内容を正確に書き起こしたテキスト（句読点含め正確に）。gpt_sovits のみ使用、irodori では参照音声のみから話者特徴を推定するため無視されます。",
             "type": "text",
             "placeholder": "例: 彼女はモーツァルトやベートーヴェンといった、古典派の作曲家が好きだ。",
             "persona_configurable": true

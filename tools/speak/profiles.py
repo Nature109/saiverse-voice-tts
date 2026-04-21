@@ -72,15 +72,21 @@ def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, A
         if not ref_audio:
             return None
         ref_text = params.get("ref_text", "")
+        # "gpt_sovits" (既定) or "irodori"。UI 未設定時や空文字は既定に倒す。
+        engine_raw = params.get("engine") or "gpt_sovits"
+        engine = str(engine_raw).strip() or "gpt_sovits"
+        # engine/再生系トグル/ref_* は params に含めず、それ以外のキーをエンジン固有
+        # パラメータとして通す(例: num_steps, truncation_factor, seed 等)。
+        _EXCLUDED_KEYS = {
+            "_enabled", "ref_audio", "ref_text", "engine",
+            "auto_speak", "server_side_playback", "client_side_playback",
+            "streaming", "output_device",
+        }
         return {
-            "engine": params.get("engine", "gpt_sovits"),
+            "engine": engine,
             "ref_audio": str(ref_audio),
             "ref_text": ref_text,
-            "params": {
-                k: v for k, v in params.items()
-                if k not in ("_enabled", "ref_audio", "ref_text", "engine",
-                             "auto_speak", "server_side_playback", "streaming")
-            },
+            "params": {k: v for k, v in params.items() if k not in _EXCLUDED_KEYS},
         }
     except Exception as exc:
         LOGGER.debug("addon_config unavailable for persona profile: %s", exc)

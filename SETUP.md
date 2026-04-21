@@ -203,13 +203,18 @@ dev mode はモバイル Safari でタブ自動破棄される事象あり。詳
 
 ## 他のバックエンド
 
-### Irodori-TTS(実験的)
+### Irodori-TTS
 
 ```batch
 setup.bat irodori
 ```
 
-本環境での動作検証が完了していないため扱いは実験的です。`registry.json` の `engine` を `irodori` に変更して使用。
+動作検証・速度最適化・疑似ストリーミング対応済。CUDA 必須、bf16 推奨。使用方法:
+
+- **アドオン管理 UI**: ペルソナ別設定 →「TTS エンジン」を `irodori` に切替
+- **registry.json**: 該当ペルソナエントリの `engine` を `irodori` に変更
+
+Irodori は参照音声のみから話者特徴を推定するため `ref_text` は無視されます。内部パラメータは `num_steps`(既定 24)、`truncation_factor`(既定 0.75、ゴミ抑制に重要)。RTF 0.3x 程度で再生に追い付くのでモバイル/Tailscale 運用も問題なし。
 
 ### 全バックエンド一括導入
 

@@ -10,5 +10,14 @@
             "top_p": 1.0,
             "text_split_method": "cut5"
         }
+    },
+    "_example_irodori": {
+        "engine": "irodori",
+        "ref_audio": "samples/_default/ref.wav",
+        "ref_text": "",
+        "params": {
+            "num_steps": 32,
+            "seed": 42
+        }
     }
 }

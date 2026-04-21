@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Irodori-TTS を本番利用可能に(experiment/irodori-tts)
+
+実験的サポートのまま放置されていた Irodori-TTS バックエンドを、動作検証 + 速度最適化 + 品質改善まで進めて本番投入可能な状態にした。
+
+- **接続修正**: `irodori.py` の import を上流の実モジュール `irodori_tts.inference_runtime` に合わせ、HF repo ID を `hf_hub_download` で解決、`SamplingRequest` のパラメータを registry の `params` から透過的に渡す構成に。
+- **速度改善(RTF 5.65x → 0.27x)**: プロファイルで `decode_latent`(DACVAE の decode)が 16 秒と支配的だったため、codec を CPU → CUDA に移し、model/codec を両方 bf16 に揃えて dtype mismatch を解消。
+- **疑似ストリーミング**: 上流 API は一括合成のみだが、アダプタ側で文単位チャンキング + 読点再分割 + 短ポーズ挿入を実装し、`supports_streaming=True` を有効化。
+  - first_sound: 約 1.4 秒 (GPT-SoVITS ストリーミングに近い体感)
+  - playback_worker の既存ストリーミング経路 (`sd.OutputStream` 逐次再生 + MP3 pub/sub クライアント配信) がそのまま動作
+- **ゴミ音声ゼロ化**: Irodori が `seconds` 予算を埋めるために出していた幻覚的な破綻音声を `SamplingRequest.truncation_factor=0.75` で抑制。ASR(Whisper small)検証で 4分間のテキストを通しても**意味不明セグメント 0 件**・本文途切れ 0 件。
+- **UI**: addon.json の params_schema に `engine` ドロップダウンを追加。ペルソナ別に `gpt_sovits` / `irodori` を切替可能。ref_text は irodori では使われない旨を description に明記。
+- **依存追加**: `torchcodec>=0.10`(torchaudio.load が torch>=2.10 系で要求)、`lameenc>=1.5`(MP3 progressive)。
+- **設定**: `config/default.json` の `engines.irodori` を新 API 準拠(`model_precision=bf16`, `codec_device=cuda` 等)に更新。
+
 ### アドオン管理 UI のペルソナ別設定をプルダウン方式に変更(feature/addon-persona-selector-ui)
 
 ペルソナ数が増えるとアコーディオン並列表示が縦に伸びすぎて操作しづらかったため、プルダウンで対象ペルソナを選んで設定する方式に変更(案C)。
