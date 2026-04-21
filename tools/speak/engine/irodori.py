@@ -160,10 +160,12 @@ class IrodoriEngine(TTSEngine):
             )
         )
 
-        # SamplingResult.audio は torch.Tensor (shape: [samples] or [channels, samples])
+        # SamplingResult.audio は torch.Tensor (shape: [samples] or [channels, samples])。
+        # bf16 運用時は numpy が BFloat16 を扱えないので、明示的に float32 にキャスト。
+        import torch  # local import: lazy_load 経由で既に存在する
         audio_tensor = result.audio
         if hasattr(audio_tensor, "detach"):
-            audio_tensor = audio_tensor.detach().cpu()
+            audio_tensor = audio_tensor.detach().to(torch.float32).cpu()
         audio = np.asarray(audio_tensor, dtype=np.float32)
         if audio.ndim > 1:
             # ステレオは平均して mono 化 (playback_worker は mono 前提)

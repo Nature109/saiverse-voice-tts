@@ -15,9 +15,9 @@
             "checkpoint": "Aratako/Irodori-TTS-500M-v2",
             "codec_repo": "Aratako/Semantic-DACVAE-Japanese-32dim",
             "device": "cuda",
-            "model_precision": "fp32",
-            "codec_device": "cpu",
-            "codec_precision": "fp32"
+            "model_precision": "bf16",
+            "codec_device": "cuda",
+            "codec_precision": "bf16"
         }
     }
 }
