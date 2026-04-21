@@ -49,13 +49,21 @@ _CLAUSE_BOUNDARY = re.compile(r"(?<=[、,])")
 # - budget (synthesize 時の seconds パラメータ) は余裕を持って
 # - hard_trim (合成後にハードカットする長さ) はゴミが出始める境界を狙って少しタイト
 # それぞれ `chars * k + margin` で算出する。
-_BUDGET_K = 0.22  # budget 係数(文字あたり秒)
-_BUDGET_MARGIN = 0.8  # budget 固定余裕(秒)
-# hard trim は「本文を切らない」を優先、margin 多めに取る。
-# タイトすぎると文末の「〜させる」「〜命だから」等の残り 0.5〜1 秒を切ってしまう。
-_TRIM_K = 0.20  # hard trim 係数
-_TRIM_MARGIN = 0.9  # hard trim 固定余裕
-_LONG_CHUNK_CHARS = 50  # この文字数を超える文は読点でさらに分割
+# budget は広めに取る(モデル側の truncation_factor で自然な停止を誘導するため
+# budget を絞る必要がなくなった)
+_BUDGET_K = 0.25
+_BUDGET_MARGIN = 1.5
+# hard trim は最終保険。truncation_factor で自然停止するので通常不要だが、
+# 万一のゴミ末尾を刈る目的で余裕多めに残す。
+_TRIM_K = 0.25
+_TRIM_MARGIN = 1.5
+# truncation_factor: 低確率トークンを除外して幻覚的な「予算埋めゴミ」を抑制。
+# 0.75 はゴミ抑制と本文完走のバランス点(0.7 だと稀に文途中で停止、
+# 0.8 以上だとゴミ再発)。実測では 45 文字までは安定完走。
+_TRUNCATION_FACTOR = 0.75
+# この文字数を超える文は読点でさらに分割。truncation での文途中停止を
+# 回避するため、短めチャンクに割る。
+_LONG_CHUNK_CHARS = 35
 _INTER_CHUNK_PAUSE_SEC = 0.12  # チャンク間に挟む無音(自然な区切り)
 
 
@@ -296,6 +304,10 @@ class IrodoriEngine(TTSEngine):
 
             chunk_params = dict(base_params)
             chunk_params["seconds"] = budget
+            # truncation_factor はゴミ末尾対策で最重要(モデルが低確率トークン
+            # で幻覚を出すのを抑制し、自然な箇所で停止する)。params で上書き
+            # されていなければ既定値を適用。
+            chunk_params.setdefault("truncation_factor", _TRUNCATION_FACTOR)
             # 上流の trim_tail を強めに効かせる (SamplingRequest 既定より厳しく)
             chunk_params.setdefault("trim_tail", True)
             chunk_params.setdefault("tail_std_threshold", 0.08)
