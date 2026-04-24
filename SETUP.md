@@ -55,14 +55,7 @@ voice_profiles/samples/_default/ref.wav
 
 #### 3. 再生方式の選択
 
-アドオン管理 UI の Voice TTS セクション(共通設定):
-
-| 項目 | 既定 | 変更するケース |
-|---|---|---|
-| ブラウザ側再生 | **ON** | 常に ON で OK (Tailscale 含む全環境で動作) |
-| サーバー側再生 | **OFF** | バックエンド PC のスピーカーから直接鳴らしたい時 |
-| サーバー側再生デバイス | `<default>` | サーバー側再生で既定以外のデバイスに出したい時(RDP 越しの「リモート オーディオ」等) |
-| ストリーミング推論 | ON | 低レイテンシ優先。OFF だと合成完了後に一括再生 |
+アドオン管理 UI の Voice TTS セクションで各トグル / ドロップダウンを設定します。既定値は **ブラウザ側再生 ON / サーバー側再生 OFF / ストリーミング推論 ON** で、Tailscale 含む多くの環境はこのままで動作します。設定項目の全リストと意味は [README の「使い方 → アドオン管理 UI」](README.md#アドオン管理-ui-推奨) を参照。
 
 #### 4. SAIVerse 起動
 
@@ -155,18 +148,9 @@ Get-Content $log -Wait -Tail 0 | Select-String "Irodori|speak_as_persona|first c
 [INFO] tools.speak.schema: speak_as_persona enqueued: persona=... job=...
 ```
 
-### 4. 主な内部パラメータ(チューニング時のみ)
+### 4. 主な内部パラメータ
 
-通常は触らなくて OK。挙動を変えたい場合のみ `registry.json` の `params` に追加する:
-
-| キー | 既定 | 用途 |
-|---|---|---|
-| `num_steps` | 24 | 拡散ステップ数。32 で高品質、16 以下で速度優先 |
-| `seed` | (ランダム) | 同じ入力で同じ出力を得たい場合に固定 |
-| `cfg_scale_text` | 3.0 | テキストへの忠実度(上げると丁寧だが硬くなる) |
-| `cfg_scale_speaker` | 5.0 | 話者特徴への忠実度 |
-
-`truncation_factor=0.75` は `irodori.py` 内でハードコードしています(ゴミ音声抑制の要。変更非推奨)。
+通常は触らなくて OK。チューニングしたい場合のエンジン別パラメータ一覧は [voice_profiles/README.md](voice_profiles/README.md#params-に指定できる項目エンジン別) を参照してください。`truncation_factor=0.75` は `irodori.py` 内のハードコード(ゴミ音声抑制の要で変更非推奨、設計理由は [ARCHITECTURE.md](ARCHITECTURE.md) 参照)。
 
 ## 詳細セットアップ(手動)
 
@@ -258,59 +242,13 @@ python -c "import sys; sys.path.insert(0, r'%CD%\external\Irodori-TTS'); from ir
 
 ## トラブルシューティング
 
-代表的なハマりどころのみ記載。詳細は [TROUBLESHOOTING.md](TROUBLESHOOTING.md) を参照してください。
+セットアップや実行時の問題は [TROUBLESHOOTING.md](TROUBLESHOOTING.md) にまとめています。目次から該当トピックを探してください。代表的なハマりどころの例:
 
-### opencc のビルドエラー
-
-`install_backends.py` が自動で `opencc` をコメントアウト + `opencc-python-reimplemented` に差し替えるため、最新版なら発生しません。詳細は TROUBLESHOOTING.md。
-
-### CUDA が認識されない(`CUDA: False`)
-
-最多原因は「GPT-SoVITS 依存が CPU 版 torch を上書きインストールした」:
-```batch
-nvidia-smi                 REM GPU が見えるか
-pip show torch             REM +cu121 などのサフィックスを確認
-pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
-```
-
-### `ModuleNotFoundError: No module named 'lameenc'`
-
-```batch
-pip install lameenc
-```
-
-### `ModuleNotFoundError: No module named 'torchcodec'` (Irodori 使用時)
-
-```batch
-pip install torchcodec
-```
-`setup.bat` の最新版では自動インストールされます。
-
-### `dtype mismatch` (Irodori 使用時に F.linear でエラー)
-
-`model_precision` と `codec_precision` を揃える必要があります。`config/default.json` の `engines.irodori` が既定で `bf16` + `bf16` になっていることを確認。CPU 運用する場合は両方 `fp32` にしてください(`codec_device: cpu` + `codec_precision: fp32` + `model_precision: fp32`)。
-
-### DLL ロード中のアクセス拒否
-
-別の Python プロセスが当該 DLL を掴んでいるのが原因:
-```batch
-Get-Process python | Stop-Process -Force
-pip install -r external\GPT-SoVITS\requirements.txt
-```
-
-### モバイルで音が鳴らない / タブがリロードされる
-
-Next.js を **production build** で起動しているか確認:
-```batch
-cd %USERPROFILE%\SAIVerse\frontend
-npm run build
-npm run start
-```
-dev mode はモバイル Safari でタブ自動破棄される事象あり。詳細は TROUBLESHOOTING.md。
-
-### 初回の音声が鳴らない
-
-モバイルブラウザの autoplay ポリシーで、最初のユーザー操作前は音声再生が拒否される。**SAIVerse の画面を 1 回タップ**してからペルソナに話しかけると鳴ります。詳細は TROUBLESHOOTING.md。
+- setup.bat が途中で止まる / opencc / editdistance のビルドエラー
+- CUDA が認識されない(GPT-SoVITS 依存で CPU 版 torch に上書きされる)
+- Irodori 固有(`torchcodec` 未インストール、`dtype mismatch`、RTF が遅い、末尾ゴミ音声)
+- モバイル Safari でタブが破棄される(dev mode 問題)
+- 初回の音声が鳴らない(autoplay)
 
 ## 全バックエンド一括導入
 
