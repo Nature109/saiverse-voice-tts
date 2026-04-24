@@ -5,3 +5,6 @@ voice_profiles/samples/**/*.wav
 !voice_profiles/samples/.gitkeep
 !voice_profiles/samples/_default/.gitkeep
 models/
+
+# ベンチマーク/動作検証の中間成果物 (wav, ASR 結果, 試行スクリプト等)
+temp/
