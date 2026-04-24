@@ -48,8 +48,8 @@
         },
         {
             "key": "client_side_playback",
-            "label": "クライアント側再生",
-            "description": "アクティブクライアントタブのブラウザから自動再生します。Tailscale越し含むすべての環境で共通して使える再生方法。",
+            "label": "ブラウザ側再生",
+            "description": "アクティブなクライアントタブ(ブラウザ)で自動再生します。Tailscale越し含むすべての環境で共通して使える再生方法。",
             "type": "toggle",
             "default": true
         },
@@ -62,8 +62,8 @@
         },
         {
             "key": "output_device",
-            "label": "出力オーディオデバイス",
-            "description": "サーバー側再生の出力先デバイスを選択します。<default> はOSの既定デバイス。",
+            "label": "サーバー側再生デバイス",
+            "description": "サーバー側再生のみで使用する出力先デバイスを選択します。ブラウザ側再生には影響しません。<default> はOSの既定デバイス。",
             "type": "dropdown",
             "default": "<default>",
             "options_endpoint": "audio-devices"
