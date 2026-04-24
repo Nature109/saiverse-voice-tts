@@ -15,15 +15,17 @@ setup.bat
 
 | ステップ | 内容 |
 |---|---|
-| 1/5 | パック依存 (numpy, sounddevice, soundfile, huggingface_hub, **lameenc**) を SAIVerse の `.venv` にインストール |
+| 1/5 | パック依存 (numpy, sounddevice, soundfile, huggingface_hub, **lameenc**, **torchcodec**) を SAIVerse の `.venv` にインストール |
 | 2/5 | `scripts/install_backends.py` 呼び出し — GPT-SoVITS を clone、上流 requirements.txt から `opencc` を自動除外、`opencc-python-reimplemented` 代替導入、重み(約4GB)を HuggingFace から DL、`fast_langdetect` キャッシュディレクトリ作成 |
 | 3/5 | `torch.cuda.is_available()` を確認し、CPU 版 torch が入っていれば `cu121` の CUDA 版を強制再導入 |
 | 4/5 | `sounddevice.query_devices()` で出力デバイスを列挙(サーバー側再生時のデバイス選択用) |
 | 5/5 | `voice_profiles/samples/_default/ref.wav` の有無を確認 |
 
-所要時間: GPU環境で 5〜15分(重みDL律速)。
+所要時間: GPU環境で 5〜15分(重み DL 律速)。
 
 > `lameenc` は PCM → MP3 エンコードに使用 (progressive 配信用)。PyPI の wheel に libmp3lame がバンドルされているため、Windows でも追加システム依存は不要です。
+>
+> `torchcodec` は Irodori-TTS の内部で呼ぶ `torchaudio.load` が torch 2.10+ 系で必要とします。GPT-SoVITS のみの運用でも事前にインストールしています(エンジン切替時に追加セットアップ不要にするため)。
 
 ### セットアップ完了後の手動作業
 
@@ -35,7 +37,7 @@ SAIVerse 起動後、ブラウザで:
 1. サイドバー → アドオン管理 → Voice TTS を展開
 2. 「ペルソナ別設定」のプルダウンから対象ペルソナを選択
 3. 「参照音声」にファイルをドラッグ&ドロップ or クリックしてアップロード
-4. 「参照音声の書き起こし」に wav の内容を正確に入力
+4. 「参照音声の書き起こし」に wav の内容を正確に入力(**irodori エンジンを使う場合は空でよい**)
 
 **方法 B: ファイル直置き**
 
@@ -49,15 +51,17 @@ voice_profiles/samples/_default/ref.wav
 
 アドオン UI でアップロードした場合は UI の「参照音声の書き起こし」欄に入力。ファイル直置きの場合は `voice_profiles/registry.json` の `_default.ref_text` を wav の**正確な**書き起こしに差し替え。句読点まで含めて合わせると品質が向上します。
 
+> Irodori-TTS は参照音声のみから話者特徴を推定するため `ref_text` を使いません。GPT-SoVITS 用に書いた ref_text が混在していても無害です。
+
 #### 3. 再生方式の選択
 
-アドオン管理 UI の Voice TTS セクション:
+アドオン管理 UI の Voice TTS セクション(共通設定):
 
 | 項目 | 既定 | 変更するケース |
 |---|---|---|
-| クライアント側再生 | **ON** | 常に ON で OK (Tailscale 含む全環境で動作) |
+| ブラウザ側再生 | **ON** | 常に ON で OK (Tailscale 含む全環境で動作) |
 | サーバー側再生 | **OFF** | バックエンド PC のスピーカーから直接鳴らしたい時 |
-| 出力オーディオデバイス | `<default>` | サーバー側再生で既定以外のデバイスに出したい時 |
+| サーバー側再生デバイス | `<default>` | サーバー側再生で既定以外のデバイスに出したい時(RDP 越しの「リモート オーディオ」等) |
 | ストリーミング推論 | ON | 低レイテンシ優先。OFF だと合成完了後に一括再生 |
 
 #### 4. SAIVerse 起動
@@ -86,6 +90,83 @@ npm run dev
 > **dev mode vs production の違いについて**: `npm run dev` はホットリロード等の開発用機能でオーバーヘッドが大きく、iOS Safari が SAIVerse タブを自動破棄する事象が観測されています。モバイルから利用する運用では必ず `npm run build && npm run start` を使ってください。
 
 ブラウザで `http://localhost:3000` → 適当なペルソナに話しかけると音声が鳴ります。Tailscale 越しの場合は割り当てられた `*.ts.net` ホスト名で。
+
+## Irodori-TTS を使う場合
+
+GPT-SoVITS に加えて Irodori-TTS を**追加で**導入する手順。既に GPT-SoVITS を `setup.bat` で入れてあれば、そのまま追加インストール可能です。
+
+### 1. Irodori バックエンドの導入
+
+```batch
+cd %USERPROFILE%\SAIVerse\expansion_data\saiverse-voice-tts
+setup.bat irodori
+```
+
+内部では:
+
+- `external/Irodori-TTS/` に upstream repo (`Aratako/Irodori-TTS`) を shallow clone
+- 上流 `requirements.txt` から推論に必須なパッケージを pip install(`dacvae` / `peft` / `safetensors` / `sentencepiece` / `transformers` / `llvmlite` / `numba` 等)
+- 重みを HuggingFace からダウンロード(初回のみ、計 約 2.3GB):
+  - `Aratako/Irodori-TTS-500M-v2` (生成モデル、約 1.9GB)
+  - `Aratako/Semantic-DACVAE-Japanese-32dim` (音声 codec、約 410MB)
+
+所要時間: ネット回線次第で 3〜10 分。
+
+### 2. ペルソナへの割り当て
+
+アドオン管理 UI から:
+
+1. サイドバー → **アドオン管理** → **Voice TTS** を展開
+2. 「ペルソナ別設定」のプルダウンで対象ペルソナを選択
+3. 「**TTS エンジン**」ドロップダウンを `irodori` に変更
+4. 「**参照音声**」に wav をアップロード(GPT-SoVITS 用の wav を流用可、**3〜10 秒の日本語肉声**が必須)
+5. 「**参照音声の書き起こし**」は**空のままで OK**(irodori では使用しない)
+
+CLI 派の場合は `voice_profiles/registry.json` を直接編集:
+
+```json
+{
+    "YourPersona_city_a": {
+        "engine": "irodori",
+        "ref_audio": "samples/YourPersona_city_a/ref.wav",
+        "ref_text": "",
+        "params": {
+            "num_steps": 32,
+            "seed": 42
+        }
+    }
+}
+```
+
+### 3. 動作確認
+
+SAIVerse バックエンドを再起動 → 対象ペルソナに話しかける。初回発話時に `Loading Irodori-TTS runtime:` のログが出て約 12 秒の初期化、その後は話し始めまで約 1.4 秒。
+
+ログの監視コマンド:
+```powershell
+$log = (Get-ChildItem $env:USERPROFILE\.saiverse\user_data\logs -Directory | Sort LastWriteTime -Desc | Select -First 1).FullName + "\backend.log"
+Get-Content $log -Wait -Tail 0 | Select-String "Irodori|speak_as_persona|first chunk"
+```
+
+期待されるログ抜粋:
+```
+[INFO] tools.speak.engine.irodori: Irodori-TTS checkpoint resolved: hf://Aratako/Irodori-TTS-500M-v2 -> ...
+[INFO] tools.speak.engine.irodori: Loading Irodori-TTS runtime: Aratako/Irodori-TTS-500M-v2 (device=cuda precision=bf16)
+[INFO] tools.speak.schema: speak_as_persona enqueued: persona=... job=...
+```
+
+### 4. 主な内部パラメータ(チューニング時のみ)
+
+通常は触らなくて OK。挙動を変えたい場合のみ `registry.json` の `params` に追加する:
+
+| キー | 既定 | 用途 |
+|---|---|---|
+| `num_steps` | 24 | 拡散ステップ数。32 で高品質、16 以下で速度優先 |
+| `seed` | (ランダム) | 同じ入力で同じ出力を得たい場合に固定 |
+| `cfg_scale_text` | 3.0 | テキストへの忠実度(上げると丁寧だが硬くなる) |
+| `cfg_scale_speaker` | 5.0 | 話者特徴への忠実度 |
+
+`truncation_factor=0.75` は `irodori.py` 内でハードコードしています(ゴミ音声抑制の要。変更非推奨)。
 
 ## 詳細セットアップ(手動)
 
@@ -117,7 +198,8 @@ python -m pip install -r requirements.txt
 - `sounddevice>=0.4.6` — サーバー側スピーカー再生
 - `soundfile>=0.12` — wav 入出力
 - `huggingface_hub>=0.20` — 重みダウンロード
-- `lameenc>=1.5` — PCM → MP3 progressive エンコーダ (クライアント配信)
+- `lameenc>=1.5` — PCM → MP3 progressive エンコーダ(クライアント配信)
+- `torchcodec>=0.10` — torchaudio.load バックエンド(Irodori で必要)
 
 ### 2. GPT-SoVITS の clone + 重み DL + 依存
 
@@ -133,7 +215,18 @@ python scripts\install_backends.py gpt_sovits
 - `lj1995/GPT-SoVITS` の重みを `external/GPT-SoVITS/GPT_SoVITS/pretrained_models/` に配置
 - `fast_langdetect/` サブディレクトリ作成
 
-### 3. CUDA 版 torch の確認
+### 3. (オプション) Irodori-TTS の clone + 重み DL + 依存
+
+```batch
+python scripts\install_backends.py irodori
+```
+
+内部では:
+- `external/Irodori-TTS/` へ shallow clone
+- 上流 `requirements.txt` のうち推論に必須なものを pip install
+- `Aratako/Irodori-TTS-500M-v2` / `Aratako/Semantic-DACVAE-Japanese-32dim` を HuggingFace からダウンロード(HF キャッシュに保存)
+
+### 4. CUDA 版 torch の確認
 
 ```batch
 python -c "import torch; print(torch.__version__, 'CUDA:', torch.cuda.is_available())"
@@ -145,14 +238,21 @@ pip uninstall -y torch torchaudio torchvision
 pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-### 4. 単体ロード確認
+### 5. 単体ロード確認
 
+**GPT-SoVITS**:
 ```batch
 python -c "import sys, os; sys.path.insert(0, r'%CD%\external\GPT-SoVITS'); sys.path.insert(0, r'%CD%\external\GPT-SoVITS\GPT_SoVITS'); os.chdir(r'%CD%\external\GPT-SoVITS'); from TTS_infer_pack.TTS import TTS, TTS_Config; TTS(TTS_Config('GPT_SoVITS/configs/tts_infer.yaml')); print('OK')"
 ```
 `Loading Text2Semantic weights ...` 〜 `OK` まで流れれば成功。
 
-### 5. 参照音声配置・registry 編集
+**Irodori-TTS**:
+```batch
+python -c "import sys; sys.path.insert(0, r'%CD%\external\Irodori-TTS'); from irodori_tts.inference_runtime import InferenceRuntime, RuntimeKey; print('OK')"
+```
+`OK` が出れば import パスは通っている。実際のロードは初回発話時に行われる。
+
+### 6. 参照音声配置・registry 編集
 
 上記「セットアップ完了後の手動作業」と同じ。
 
@@ -179,6 +279,17 @@ pip install torch torchaudio torchvision --index-url https://download.pytorch.or
 pip install lameenc
 ```
 
+### `ModuleNotFoundError: No module named 'torchcodec'` (Irodori 使用時)
+
+```batch
+pip install torchcodec
+```
+`setup.bat` の最新版では自動インストールされます。
+
+### `dtype mismatch` (Irodori 使用時に F.linear でエラー)
+
+`model_precision` と `codec_precision` を揃える必要があります。`config/default.json` の `engines.irodori` が既定で `bf16` + `bf16` になっていることを確認。CPU 運用する場合は両方 `fp32` にしてください(`codec_device: cpu` + `codec_precision: fp32` + `model_precision: fp32`)。
+
 ### DLL ロード中のアクセス拒否
 
 別の Python プロセスが当該 DLL を掴んでいるのが原因:
@@ -201,28 +312,13 @@ dev mode はモバイル Safari でタブ自動破棄される事象あり。詳
 
 モバイルブラウザの autoplay ポリシーで、最初のユーザー操作前は音声再生が拒否される。**SAIVerse の画面を 1 回タップ**してからペルソナに話しかけると鳴ります。詳細は TROUBLESHOOTING.md。
 
-## 他のバックエンド
-
-### Irodori-TTS
-
-```batch
-setup.bat irodori
-```
-
-動作検証・速度最適化・疑似ストリーミング対応済。CUDA 必須、bf16 推奨。使用方法:
-
-- **アドオン管理 UI**: ペルソナ別設定 →「TTS エンジン」を `irodori` に切替
-- **registry.json**: 該当ペルソナエントリの `engine` を `irodori` に変更
-
-Irodori は参照音声のみから話者特徴を推定するため `ref_text` は無視されます。内部パラメータは `num_steps`(既定 24)、`truncation_factor`(既定 0.75、ゴミ抑制に重要)。RTF 0.3x 程度で再生に追い付くのでモバイル/Tailscale 運用も問題なし。
-
-### 全バックエンド一括導入
+## 全バックエンド一括導入
 
 ```batch
 setup.bat all
 ```
 
-現時点でサポートしているのは GPT-SoVITS と Irodori-TTS の 2 つです。
+現時点でサポートしているのは GPT-SoVITS と Irodori-TTS の 2 つです。両方が inst 済みの状態でも、UI または `registry.json` で**ペルソナごとに使うエンジンを切り替えられます**。
 
 ## アンインストール
 
@@ -232,5 +328,5 @@ del /Q voice_profiles\samples\_default\ref.wav
 ```
 パック Python 依存は SAIVerse の `.venv` に残ります(他用途との共有のため)。完全削除は:
 ```batch
-pip uninstall -y sounddevice soundfile opencc-python-reimplemented lameenc
+pip uninstall -y sounddevice soundfile opencc-python-reimplemented lameenc torchcodec
 ```

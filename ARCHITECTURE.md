@@ -158,7 +158,62 @@ stream.stop(); stream.close()
 3. **ストリーミングパラメータ**: `streaming_mode=True` + `parallel_infer=False` の組み合わせが必要(SoVITS V3/V4 は自動で return_fragment にフォールバック)。
 
 #### `irodori.py`
-未検証。`InferenceRuntime.synthesize()` のラッパスケルトン。実験的サポート。
+
+Irodori-TTS (Aratako/Irodori-TTS-500M-v2) のアダプタ。**上流 API は一括合成のみ**で native streaming をサポートしないが、アダプタ側で**文単位チャンキングによる疑似ストリーミング**を実装し、`supports_streaming = True` として公開している。
+
+**主要な内部定数**:
+
+| 定数 | 値 | 用途 |
+|---|---|---|
+| `_BUDGET_K` / `_BUDGET_MARGIN` | 0.25 / 1.5 | `seconds = chars × K + M` でチャンク単位の予算を自動算出 |
+| `_TRIM_K` / `_TRIM_MARGIN` | 0.25 / 1.5 | 合成後のハードトリム長(本文を切らないため広め) |
+| `_TRUNCATION_FACTOR` | **0.75** | **ゴミ音声抑制の要**。低確率トークンを分布から除外 |
+| `_LONG_CHUNK_CHARS` | 35 | 超えるチャンクは読点で再分割 |
+| `_INTER_CHUNK_PAUSE_SEC` | 0.12 | チャンク間の自然な息継ぎ無音 |
+
+**synthesize_stream() のフロー**:
+
+```
+文単位分割 (。！？!?)
+    ↓
+長文を読点で再分割 (>35文字)
+    ↓
+各チャンクを逐次:
+   seconds = chars × 0.25 + 1.5
+   SamplingRequest(
+     text=chunk_text, ref_wav=...,
+     num_steps=24, truncation_factor=0.75,
+     seconds=seconds,
+     trim_tail=True, tail_std_threshold=0.08, ...)
+    ↓
+   runtime.synthesize(req)  # 一括 (内部で ~1s)
+    ↓
+   _trim_tail_garbage(audio)  # ハードトリム + -50dB 末尾無音除去
+    ↓
+   yield SynthesisChunk
+    ↓
+   yield 120ms 無音チャンク (次チャンクとの区切り)
+```
+
+**なぜ `truncation_factor=0.75` が必要か**: Irodori は `seconds` 予算と実音声長が乖離するとモデルが低確率トークンを使って「予算埋めのゴミ発声」を生成する。truncation で分布の裾を切ると、モデルが自然な場所で停止するようになり**予算埋めゴミが生成されなくなる**。0.7 以下だと本文が切れ、0.8 以上だとゴミ再発。0.75 が実測のスイートスポット。
+
+**起動時の差異** (GPT-SoVITS との対比):
+
+| 項目 | GPT-SoVITS | Irodori |
+|---|---|---|
+| モデル構成 | BERT + CNHuBERT + T2S + VITS (約 4GB) | 500M DiT + DACVAE codec (約 2.3GB) |
+| 初回ロード | 10〜20 秒 | 約 12 秒 |
+| ストリーミング | ネイティブ(`streaming_mode=True`) | 疑似(文単位チャンキング) |
+| 話し始めまで (warm) | 約 0.5〜1 秒 | 約 1.4 秒 |
+| RTF (warm) | 1.3〜1.5x | 0.3〜0.35x |
+| ref_text | 必要(発話内容の書き起こし) | 不要(ref_wav のみから話者推定) |
+| dtype | モデル次第 | bf16(CUDA)または fp32 |
+
+**dtype 一貫性**: `model_precision` と `codec_precision` は揃える必要がある(不一致だと F.linear が `mat1/mat2 dtype mismatch` で落ちる)。既定は両方 `bf16` + `codec_device=cuda`。
+
+**checkpoint 解決**: `RuntimeKey.checkpoint` は上流ではローカルファイルパスを想定しているが、アダプタ側で拡張子なしなら HF repo ID と判定して `hf_hub_download(repo_id=..., filename='model.safetensors')` で自動 DL する。
+
+**torchaudio.load と torchcodec**: Irodori 内部の `_load_audio` が `torchaudio.load` を呼ぶが、torch 2.10+ 系ではこれが `torchcodec` backend を要求する。パックの `requirements.txt` に `torchcodec>=0.10` を明示している。
 
 ### `tools/speak/audio_stream.py`
 

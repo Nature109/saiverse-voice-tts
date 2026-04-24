@@ -42,6 +42,15 @@ voice_profiles/
         "params": {
             "speed": 1.05
         }
+    },
+    "Eris_city_a": {
+        "engine": "irodori",
+        "ref_audio": "samples/Eris_city_a/ref.wav",
+        "ref_text": "",
+        "params": {
+            "num_steps": 32,
+            "seed": 42
+        }
     }
 }
 ```
@@ -50,10 +59,10 @@ voice_profiles/
 
 | フィールド | 必須 | 説明 |
 |---|---|---|
-| `engine` | 必須 | `gpt_sovits`(推奨) / `irodori`(実験的) |
+| `engine` | 必須 | `gpt_sovits`(既定) / `irodori` |
 | `ref_audio` | 必須 | `samples/` 以下の相対パス(絶対パスも可) |
-| `ref_text` | 必須 | `ref_audio` の**正確な**書き起こし。句読点まで合わせると品質向上 |
-| `params` | 任意 | エンジン別の生成パラメータ |
+| `ref_text` | エンジン依存 | gpt_sovits は必須(wav の**正確な**書き起こし)。irodori は無視されるので空でよい |
+| `params` | 任意 | エンジン別の生成パラメータ(下記参照) |
 
 ### `params` に指定できる項目(エンジン別)
 
@@ -68,6 +77,20 @@ voice_profiles/
 | `overlap_length` | 2 | ストリーミング時のチャンク間オーバーラップ |
 | `min_chunk_length` | 16 | ストリーミング最小チャンク長(semantic token 数) |
 | `fixed_length_chunk` | false | 固定長チャンク(true で速度優先・品質低下) |
+
+#### irodori
+| キー | 既定値 | 説明 |
+|---|---|---|
+| `num_steps` | 24 | 拡散ステップ数。32 で高品質、16 以下で速度優先 |
+| `seed` | (ランダム) | 同じ入力で同じ出力を得たい場合に固定 |
+| `cfg_scale_text` | 3.0 | テキストへの忠実度(上げると丁寧だが硬くなる) |
+| `cfg_scale_speaker` | 5.0 | 話者特徴への忠実度 |
+| `truncation_factor` | 0.75 | ゴミ音声抑制のコア。**通常変更非推奨**(下げると途切れ、上げるとゴミ再発) |
+| `seconds` | 自動算出 | チャンクごとに文字数から推定。指定すると上書き |
+
+> Irodori の ref_text 欄は無視されるので空でよい(上流 API が ref_wav からのみ話者特徴を抽出する)。
+>
+> `ref_audio` は GPT-SoVITS と Irodori で同じ wav を使い回せる。要件は「3〜10 秒、日本語の肉声、背景雑音なし」で共通。
 
 ## 参照音声の準備ガイド
 
@@ -111,10 +134,20 @@ for row in conn.execute('SELECT PERSONA_ID, DISPLAY_NAME FROM ai'):
 
 プロファイル追加後、SAIVerse を再起動して該当ペルソナに話しかける。正しく認識されていれば以下のログが出る:
 
+**gpt_sovits**:
 ```
 speak_as_persona enqueued: persona=Yui_city_a job=...
 Loading GPT-SoVITS TTS pipeline     ← 初回のみ
 TTS first chunk ready after 0.53s (job=...)
+TTS streamed wav saved: ...\voice\out\<job_id>.wav
+```
+
+**irodori**:
+```
+speak_as_persona enqueued: persona=Eris_city_a job=...
+Irodori-TTS checkpoint resolved: hf://Aratako/Irodori-TTS-500M-v2 -> ...
+Loading Irodori-TTS runtime: Aratako/Irodori-TTS-500M-v2 (device=cuda precision=bf16)   ← 初回のみ
+TTS first chunk ready after 1.44s (job=...)
 TTS streamed wav saved: ...\voice\out\<job_id>.wav
 ```
 
