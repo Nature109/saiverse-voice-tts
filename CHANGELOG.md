@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### `_shadowed_tools_namespace` hack を削除(chore/remove-tools-shadow-hack)
+
+ホスト側に `addon_external_loader` が導入されたことで、各パックが
+``sys.modules['tools']`` を一時剥がしする hack が不要になった。`gpt_sovits.py`
+から以下を削除:
+
+- `_shadowed_tools_namespace()` コンテキストマネージャ関数(20 行)
+- TTS 初期化箇所での `with _cwd(_EXTERNAL_REPO), _shadowed_tools_namespace():`
+  → `with _cwd(_EXTERNAL_REPO):`(`_cwd` は cwd 切替が必要なので残す)
+
+**前提**: SAIVerse 本体側に `addon_external_loader` が入っていること
+(ホスト 2026-04 以降のブランチ)。本機構が無いホストで本パックを動かすと、
+GPT-SoVITS ロード時に本体側 `tools` パッケージとの名前衝突で `ImportError`
+が発生する。古いホストで動かしたい場合は本コミット以前の版を使うこと。
+
+**影響**: 並列スレッドで TTS ロード中にホスト側 import が走った場合の
+名前空間汚染が原理的に発生しなくなる(従来 hack の根本欠陥を解消)。
+Irodori-TTS には同種の hack は無いので変更なし。
+
 ### 再生系トグル/デバイスのラベル調整(docs/irodori-integration)
 
 アドオン管理 UI でユーザーが項目の意図を誤認しないよう、ラベルとドキュメントを整理:

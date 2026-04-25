@@ -51,27 +51,6 @@ def _cwd(path: Path) -> Iterator[None]:
         os.chdir(prev)
 
 
-@contextlib.contextmanager
-def _shadowed_tools_namespace() -> Iterator[None]:
-    """Temporarily detach SAIVerse's ``tools`` package from sys.modules so that
-    GPT-SoVITS's relative ``from tools.audio_sr import ...`` imports resolve
-    against its own ``external/GPT-SoVITS/tools`` directory (which is on
-    sys.path) rather than the host project's ``tools`` package."""
-    backup = {
-        k: v for k, v in sys.modules.items()
-        if k == "tools" or k.startswith("tools.")
-    }
-    for k in list(backup):
-        del sys.modules[k]
-    try:
-        yield
-    finally:
-        for k in list(sys.modules):
-            if (k == "tools" or k.startswith("tools.")) and k not in backup:
-                del sys.modules[k]
-        sys.modules.update(backup)
-
-
 class GPTSoVITSEngine(TTSEngine):
     name = "gpt_sovits"
     supports_streaming = True
@@ -134,10 +113,11 @@ class GPTSoVITSEngine(TTSEngine):
         self._patch_torchaudio_load()
 
         # GPT-SoVITS reads pretrained_models/... via relative paths, so init
-        # must happen with cwd == repo root. We also need to shadow SAIVerse's
-        # `tools` package so that GPT-SoVITS's `from tools.audio_sr import ...`
-        # resolves to its own tools directory.
-        with _cwd(_EXTERNAL_REPO), _shadowed_tools_namespace():
+        # must happen with cwd == repo root. The host's `tools` package
+        # collision (GPT-SoVITS internal `from tools.audio_sr import ...` vs
+        # SAIVerse's tools/) is handled by the host's addon_external_loader,
+        # which redirects external/ callers to addons.<addon>.tools transparently.
+        with _cwd(_EXTERNAL_REPO):
             try:
                 from TTS_infer_pack.TTS import TTS, TTS_Config  # type: ignore
             except ImportError as exc:
