@@ -18,7 +18,9 @@ from typing import Any, Dict, Optional
 LOGGER = logging.getLogger(__name__)
 
 _PACK_ROOT = Path(__file__).resolve().parent.parent.parent
+# ユーザーローカル版(.gitignore 対象)。存在しなければ .template から自動コピー。
 _REGISTRY_PATH = _PACK_ROOT / "voice_profiles" / "registry.json"
+_REGISTRY_TEMPLATE_PATH = _PACK_ROOT / "voice_profiles" / "registry.json.template"
 _ADDON_NAME = "saiverse-voice-tts"
 
 _cached_registry: Optional[Dict[str, Any]] = None
@@ -28,14 +30,35 @@ def _load_registry() -> Dict[str, Any]:
     global _cached_registry
     if _cached_registry is not None:
         return _cached_registry
-    if not _REGISTRY_PATH.exists():
-        LOGGER.warning("Voice profile registry not found: %s", _REGISTRY_PATH)
+    # ローカル版が無ければ .template から初回コピー (first-run materialization)。
+    if not _REGISTRY_PATH.exists() and _REGISTRY_TEMPLATE_PATH.exists():
+        try:
+            _REGISTRY_PATH.write_text(
+                _REGISTRY_TEMPLATE_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            LOGGER.info(
+                "Materialized %s from %s (first run).",
+                _REGISTRY_PATH.name, _REGISTRY_TEMPLATE_PATH.name,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to materialize %s from template: %s",
+                _REGISTRY_PATH, exc,
+            )
+    # 読み込み元: ローカル版 → なければ template
+    source = _REGISTRY_PATH if _REGISTRY_PATH.exists() else _REGISTRY_TEMPLATE_PATH
+    if not source.exists():
+        LOGGER.warning(
+            "Voice profile registry not found (neither %s nor %s)",
+            _REGISTRY_PATH, _REGISTRY_TEMPLATE_PATH,
+        )
         _cached_registry = {}
         return _cached_registry
     try:
-        _cached_registry = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+        _cached_registry = json.loads(source.read_text(encoding="utf-8"))
     except Exception as exc:
-        LOGGER.error("Failed to parse voice profile registry: %s", exc)
+        LOGGER.error("Failed to parse voice profile registry from %s: %s", source, exc)
         _cached_registry = {}
     return _cached_registry
 

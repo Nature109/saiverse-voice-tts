@@ -61,6 +61,23 @@ python -m pip install -r requirements.txt
 if errorlevel 1 goto :err
 echo [OK]
 
+REM --- Materialize user-local config files from templates (first-run only) --
+REM config/default.json と voice_profiles/registry.json は .gitignore 対象で
+REM ユーザーが自由に編集してよいファイル。テンプレートから初回コピーする。
+REM 既に存在すればユーザーの編集を尊重して上書きしない。
+if not exist "config\default.json" (
+    if exist "config\default.json.template" (
+        copy /Y "config\default.json.template" "config\default.json" >nul
+        echo [INFO] Created config\default.json from template
+    )
+)
+if not exist "voice_profiles\registry.json" (
+    if exist "voice_profiles\registry.json.template" (
+        copy /Y "voice_profiles\registry.json.template" "voice_profiles\registry.json" >nul
+        echo [INFO] Created voice_profiles\registry.json from template
+    )
+)
+
 REM --- 2. Backend install (clone + weights + requirements) ------------------
 echo.
 echo [2/7] Running install_backends.py for !BACKEND!...

@@ -4,6 +4,8 @@
 
 > **アドオン管理 UI からのアップロードを推奨**: SAIVerse のアドオン管理画面 → Voice TTS → ペルソナ別設定 で参照音声 wav と書き起こしをアップロードできます。UI でアップロードした値は本体側のアドオンストレージに保存され、**`registry.json` より UI 側の設定が優先**されます。本ファイルで記述する方式は CLI で一括管理したい場合や、UI 対応前の環境用のフォールバック手順です。
 
+> **`registry.json` はローカルファイル**: 上流が配布するのは `registry.json.template`(git 管理)で、`registry.json` は `.gitignore` 対象のユーザー編集用です。初回 `setup.bat` 実行時(またはバックエンド初回起動時のローダ)に template から自動生成されます。`git pull` で上流の `.template` が更新されてもローカルの `registry.json` は触られず、衝突しません。新規フィールドを取り込みたい場合は `git diff registry.json.template` を確認して手動でマージしてください。
+
 ## ディレクトリ構成
 
 ```

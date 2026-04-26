@@ -26,7 +26,10 @@ from . import audio_stream
 LOGGER = logging.getLogger(__name__)
 
 _PACK_ROOT = Path(__file__).resolve().parent.parent.parent
+# ユーザーローカル設定ファイル(.gitignore 対象、各環境固有の値を持つ)。
+# 存在しない場合は .template から自動コピーされる(_load_config 内)。
 _CONFIG_PATH = _PACK_ROOT / "config" / "default.json"
+_CONFIG_TEMPLATE_PATH = _PACK_ROOT / "config" / "default.json.template"
 _ADDON_NAME = "saiverse-voice-tts"
 
 
@@ -248,11 +251,30 @@ class _TTSWorker:
     def _load_config(self) -> Dict[str, Any]:
         if self._config_loaded:
             return self._config
-        if _CONFIG_PATH.exists():
+        # ローカル版が無ければ .template から初回コピー (first-run materialization)。
+        # ユーザーが local 版を編集して上流 pull で衝突しないようにするための仕組み。
+        if not _CONFIG_PATH.exists() and _CONFIG_TEMPLATE_PATH.exists():
             try:
-                self._config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+                _CONFIG_PATH.write_text(
+                    _CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+                LOGGER.info(
+                    "Materialized %s from %s (first run).",
+                    _CONFIG_PATH.name, _CONFIG_TEMPLATE_PATH.name,
+                )
             except Exception as exc:
-                LOGGER.error("Failed to load voice-tts config: %s", exc)
+                LOGGER.warning(
+                    "Failed to materialize %s from template: %s",
+                    _CONFIG_PATH, exc,
+                )
+        # 読み込み元: ローカル版 → なければ template の内容を直接使う
+        source = _CONFIG_PATH if _CONFIG_PATH.exists() else _CONFIG_TEMPLATE_PATH
+        if source.exists():
+            try:
+                self._config = json.loads(source.read_text(encoding="utf-8"))
+            except Exception as exc:
+                LOGGER.error("Failed to load voice-tts config from %s: %s", source, exc)
                 self._config = {}
         self._config_loaded = True
         return self._config

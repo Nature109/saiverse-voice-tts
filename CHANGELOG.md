@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+### ユーザー編集ファイルをテンプレート方式に変更(feature/template-based-user-config)
+
+`config/default.json` と `voice_profiles/registry.json` は **ユーザーが手元で編集する**前提のファイルだが、これらが git 管理下にあったため `git pull` 時に上流の更新と衝突し、毎回 `git stash → pull → stash pop` が必要だった。
+
+#### 変更点
+
+- `config/default.json` を `config/default.json.template` にリネーム(git 管理対象)
+- `voice_profiles/registry.json` を `voice_profiles/registry.json.template` にリネーム
+- `.gitignore` にローカル版(`config/default.json`、`voice_profiles/registry.json`)を追加
+- ローダ(`playback_worker._load_config` / `profiles._load_registry`)を改修:
+  - ローカル版が無ければ `.template` から**初回コピー**(first-run materialization)
+  - 以降はローカル版を読む
+  - 上流(`.template`)が更新されても**ローカル版は触られない**
+- `setup.bat` にも明示的な first-run コピーステップを追加(冗長だが透明性のため)
+
+#### 既存ユーザー向けマイグレーション(本コミットを pull する前に必須)
+
+ローカルで `config/default.json` または `voice_profiles/registry.json` を編集している場合、そのまま `git pull` するとマージ衝突します。手順:
+
+```bash
+# 1. ローカル編集を退避
+cp config/default.json /tmp/my_default.json
+cp voice_profiles/registry.json /tmp/my_registry.json
+
+# 2. 追跡ファイルを上流バージョンに戻す
+git checkout HEAD -- config/default.json voice_profiles/registry.json
+
+# 3. pull(衝突なく完了する)
+git pull
+
+# 4. 退避させた編集を戻す(これらは untracked になる)
+cp /tmp/my_default.json config/default.json
+cp /tmp/my_registry.json voice_profiles/registry.json
+```
+
+以降は `git pull` で衝突しません。`.template` が更新されても `git diff config/default.json.template` で差分を確認して手動で取り込めます。
+
+#### 新規ユーザー(初回 setup.bat 実行)
+
+何も意識しないで OK。setup.bat が `.template` から自動コピーします。
+
 ### `_shadowed_tools_namespace` hack を削除(chore/remove-tools-shadow-hack)
 
 ホスト側に `addon_external_loader` が導入されたことで、各パックが

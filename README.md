@@ -172,10 +172,15 @@ saiverse-voice-tts/
 │   └── sub_speak.json             ← 本体 sub_speak を上書きし、tts_speak ノード追加
 ├── voice_profiles/
 │   ├── README.md                  ← プロファイル追加手順
-│   ├── registry.json              ← ペルソナ毎の参照音声設定(フォールバック)
+│   ├── registry.json.template     ← 上流が配布する既定値(git 管理)
+│   ├── registry.json              ← ユーザー編集用ローカル(.gitignore、初回起動時に template からコピー)
 │   └── samples/<persona_id>/ref.wav
-└── config/default.json            ← エンジン共通設定 + engines.* のランタイム設定
+└── config/
+    ├── default.json.template      ← 上流が配布する既定値(git 管理)
+    └── default.json               ← ユーザー編集用ローカル(.gitignore、初回起動時に template からコピー)
 ```
+
+> **テンプレート方式について**: `config/default.json` と `voice_profiles/registry.json` は**ユーザーが各環境固有の値を書き込むローカルファイル**で、git 管理外です。上流が配布するのは `.template` のみで、初回 `setup.bat` 実行(またはバックエンド初回起動)時にローカル版が自動生成されます。これにより `git pull` 時にユーザー編集が衝突しません。
 
 ## 使い方
 

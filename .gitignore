@@ -8,3 +8,8 @@ models/
 
 # ベンチマーク/動作検証の中間成果物 (wav, ASR 結果, 試行スクリプト等)
 temp/
+
+# ユーザーローカルな設定ファイル(初回起動時に *.template から作成される)。
+# 上流が更新するのは .template のみで、こちらは各環境固有の値を持つ。
+config/default.json
+voice_profiles/registry.json
