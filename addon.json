@@ -40,16 +40,6 @@
             "persona_configurable": true
         },
         {
-            "key": "pronunciation_dict",
-            "label": "読み方辞書 (全ペルソナ共通)",
-            "description": "TTS エンジンが固有名詞などを誤読する場合、合成直前に文字列置換で読みを補正します。例: キー「まはー」/ 値「マハー」と書くと、本文の『まはー』が『マハー』に置換されてから音声合成されます。チャット表示や記憶には影響しません。voice_profiles/pronunciation_dict.json (ファイル辞書) と統合され、同一キーの場合は本UIの値が優先されます。特定ペルソナだけ別の読み方を持たせたい場合は registry.json の per-persona pronunciation_dict を併用してください。",
-            "type": "dict",
-            "default": {},
-            "persona_configurable": false,
-            "collapsible": true,
-            "default_collapsed": true
-        },
-        {
             "key": "server_side_playback",
             "label": "サーバー側再生",
             "description": "バックエンドPCのスピーカーから自動再生します。ブラウザを開いていない環境で音を鳴らしたい場合などにONにします。デフォルトOFF。",
@@ -77,6 +67,16 @@
             "type": "dropdown",
             "default": "<default>",
             "options_endpoint": "audio-devices"
+        },
+        {
+            "key": "pronunciation_dict",
+            "label": "読み方辞書 (全ペルソナ共通)",
+            "description": "TTS エンジンが固有名詞などを誤読する場合、合成直前に文字列置換で読みを補正します。例: キー「まはー」/ 値「マハー」と書くと、本文の『まはー』が『マハー』に置換されてから音声合成されます。チャット表示や記憶には影響しません。voice_profiles/pronunciation_dict.json (ファイル辞書) と統合され、同一キーの場合は本UIの値が優先されます。特定ペルソナだけ別の読み方を持たせたい場合は registry.json の per-persona pronunciation_dict を併用してください。",
+            "type": "dict",
+            "default": {},
+            "persona_configurable": false,
+            "collapsible": true,
+            "default_collapsed": true
         }
     ],
     "ui_extensions": {
