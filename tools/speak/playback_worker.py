@@ -488,10 +488,22 @@ class _TTSWorker:
         if resolved_device is None:
             resolved_device = _parse_output_device(cfg.get("output_device"))
 
+        # ユーザー読み方辞書の適用 (TTS engine に渡す直前に文字列置換)。
+        # global 辞書 + ペルソナ別オーバーライド (registry の pronunciation_dict)
+        # が両方ある場合は persona の方が先に適用される。
+        from . import pronunciation_dict as _pd
+        persona_dict = profile.get("pronunciation_dict")
+        tts_text = _pd.apply(job.text, persona_dict=persona_dict)
+        if tts_text != job.text:
+            LOGGER.debug(
+                "pronunciation_dict applied: %d -> %d chars (persona=%s)",
+                len(job.text), len(tts_text), job.persona_id,
+            )
+
         if use_streaming:
             ok = self._play_streaming(
                 engine=engine,
-                text=job.text,
+                text=tts_text,
                 ref_audio=profile.get("ref_audio"),
                 ref_text=profile.get("ref_text"),
                 params=profile.get("params"),
@@ -506,7 +518,7 @@ class _TTSWorker:
 
         try:
             result = engine.synthesize(
-                text=job.text,
+                text=tts_text,
                 ref_audio=profile.get("ref_audio"),
                 ref_text=profile.get("ref_text"),
                 params=profile.get("params"),

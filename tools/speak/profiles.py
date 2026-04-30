@@ -98,12 +98,15 @@ def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, A
         # "gpt_sovits" (既定) or "irodori"。UI 未設定時や空文字は既定に倒す。
         engine_raw = params.get("engine") or "gpt_sovits"
         engine = str(engine_raw).strip() or "gpt_sovits"
-        # engine/再生系トグル/ref_* は params に含めず、それ以外のキーをエンジン固有
-        # パラメータとして通す(例: num_steps, truncation_factor, seed 等)。
+        # engine/再生系トグル/ref_*/pronunciation_dict は params に含めず、それ以外
+        # のキーをエンジン固有パラメータとして通す(例: num_steps, truncation_factor,
+        # seed 等)。pronunciation_dict は addon UI ではグローバル設定なので
+        # 個別 profile には引き上げない (pronunciation_dict.py 側でグローバル
+        # として直接ロードする)。
         _EXCLUDED_KEYS = {
             "_enabled", "ref_audio", "ref_text", "engine",
             "auto_speak", "server_side_playback", "client_side_playback",
-            "streaming", "output_device",
+            "streaming", "output_device", "pronunciation_dict",
         }
         return {
             "engine": engine,

@@ -4,6 +4,100 @@
 
 ## [Unreleased]
 
+### ユーザー読み方辞書(発音上書き)を追加(feature/pronunciation-dict)
+
+GPT-SoVITS / Irodori-TTS の g2p (grapheme-to-phoneme) が固有名詞・専門語を
+誤読する場合、ユーザーが**辞書ファイルで置換ルールを書ける**仕組みを追加。
+
+例: 「まはー」が MeCab 解析で「ま+は(助詞)+ー」と誤分割されて `mawaa` 読み
+されてしまう問題に対し、辞書で「まはー → マハー」と書けばカタカナの「ハ」
+は助詞解釈されないため `mahā` ≈ `mahaa` と読まれる。
+
+#### 配置 (テンプレート方式、ユーザーローカル)
+
+- `voice_profiles/pronunciation_dict.json.template` (上流配布、git 管理)
+- `voice_profiles/pronunciation_dict.json` (`.gitignore`、初回起動時に自動コピー)
+
+#### 動作
+
+1. ペルソナ応答テキストを TTS エンジンに渡す**直前**に文字列置換
+2. チャット UI 表示や SAIMemory 保存テキストには影響しない (TTS 専用フィルタ)
+3. 適用順: **ペルソナ別 override (registry の `pronunciation_dict`) → グローバル**
+4. キーは長い順に適用 (部分一致による意図しない置換を防止)
+5. `_` で始まるキーはコメント扱いで無視
+
+#### 辞書フォーマット例
+
+```json
+{
+    "_comment": "コメントは _ で始めれば無視される",
+    "まはー": "マハー",
+    "SAIVerse": "サイバース"
+}
+```
+
+#### グローバル辞書を 2 ソースから合成 (推奨: アドオン管理 UI)
+
+SAIVerse 本体の **アドオン管理 → Voice TTS → 読み方辞書 (全ペルソナ共通)**
+で key/value を直接追加・編集できる。本体側に `dict` 型の params_schema が
+入った後 (本体 `feature/addon-dict-param-type` のマージが必要) のバージョン
+から有効。
+
+「全ペルソナ共通」のグローバル辞書は次の 2 ソースのマージ結果:
+
+1. UI で編集した辞書 (DB 保存、GUI 編集向け、再起動なしで反映)
+2. `voice_profiles/pronunciation_dict.json` (ファイル辞書、CLI 編集向け)
+
+同一キーがある場合は **UI > ファイル** で UI 値が優先される。
+
+#### ペルソナ別オーバーライド (registry.json)
+
+特定ペルソナだけ別の読み方を持たせたい場合は従来通り `registry.json` の
+ペルソナエントリに `pronunciation_dict` キーを書く:
+
+```json
+{
+    "Eris_city_a": {
+        "engine": "irodori",
+        "ref_audio": "...",
+        "params": {...},
+        "pronunciation_dict": {
+            "ナチュレ": "なつる"
+        }
+    }
+}
+```
+
+#### 適用順序 (高→低)
+
+1. ペルソナ別 (registry.json[<persona>].pronunciation_dict)
+2. グローバル (UI ∪ file、UI が同一キーで優先)
+3. そのまま (置換ルールに該当しなければ)
+
+#### 変更ファイル
+
+- `tools/speak/pronunciation_dict.py` (新規): 辞書ローダ + apply 関数。
+  ファイル辞書はキャッシュし、UI 辞書は呼び出しごとに DB から fresh 取得
+  (UI 編集即時反映)
+- `tools/speak/playback_worker.py`: engine 呼び出し前に apply() を仕込む
+- `tools/speak/profiles.py`: AddonPersonaConfig からの引き上げ対象から
+  `pronunciation_dict` を除外 (UI ではグローバル設定なので個別 profile に
+  載せない)
+- `addon.json`: `pronunciation_dict` (type=dict, persona_configurable=false)
+  を全ペルソナ共通設定として追加
+- `voice_profiles/pronunciation_dict.json.template` (新規)
+- `.gitignore`: ローカル辞書を追記
+- `tests/test_pronunciation_dict.py` (新規): 23 件のユニットテスト
+  (apply 基本 15 件 + UI ∪ file マージ 8 件)
+
+#### 既知の限界
+
+- 平文置換のみ(regex 非対応、必要なら v2 で検討)
+- 置換結果が TTS エンジンで意図通り読まれるかは MeCab 解析次第。実際に
+  聴いて確認しながら辞書を調整する想定
+- 文書中の「は」を全て置換すると助詞「は」も置換されてしまう。固有名詞単位
+  で登録するのが基本
+
 ### ユーザー編集ファイルをテンプレート方式に変更(feature/template-based-user-config)
 
 `config/default.json` と `voice_profiles/registry.json` は **ユーザーが手元で編集する**前提のファイルだが、これらが git 管理下にあったため `git pull` 時に上流の更新と衝突し、毎回 `git stash → pull → stash pop` が必要だった。

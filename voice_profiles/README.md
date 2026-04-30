@@ -1,6 +1,7 @@
 # voice_profiles/
 
 ペルソナ ID と参照音声(ref wav)の対応表を定義するディレクトリ。
+あわせて TTS エンジンの読み方を補正するユーザー読み方辞書 (`pronunciation_dict.json`) もここに置く。
 
 > **アドオン管理 UI からのアップロードを推奨**: SAIVerse のアドオン管理画面 → Voice TTS → ペルソナ別設定 で参照音声 wav と書き起こしをアップロードできます。UI でアップロードした値は本体側のアドオンストレージに保存され、**`registry.json` より UI 側の設定が優先**されます。本ファイルで記述する方式は CLI で一括管理したい場合や、UI 対応前の環境用のフォールバック手順です。
 
@@ -10,8 +11,11 @@
 
 ```
 voice_profiles/
-├── README.md            ← このファイル
-├── registry.json        ← ペルソナ ID → プロファイル対応表
+├── README.md                          ← このファイル
+├── registry.json.template             ← 上流配布(git 管理)
+├── registry.json                      ← ユーザー編集ローカル(.gitignore)
+├── pronunciation_dict.json.template   ← 上流配布(git 管理)、読み方辞書のひな形
+├── pronunciation_dict.json            ← ユーザー編集ローカル(.gitignore)
 └── samples/
     ├── _default/
     │   └── ref.wav      ← デフォルト参照音声(どのペルソナIDにも無い時のフォールバック)
@@ -161,3 +165,102 @@ TTS streamed wav saved: ...\voice\out\<job_id>.wav
 - `ref_audio` のパスタイポ → `_default` にフォールバックするので気付きにくい。ログで `No voice profile` が出ていなければ読み込めている
 - ステレオ wav の片チャンネルのみ使用される → mono に変換を推奨
 - サンプリングレート不一致 → GPT-SoVITS は内部で resample するので問題ないが、24kHz/32kHz 推奨
+
+---
+
+## ユーザー読み方辞書 (`pronunciation_dict.json`)
+
+TTS エンジンが固有名詞・専門語を誤読する場合、辞書ファイルで置換ルールを書ける。
+TTS エンジンに渡す**直前**にテキストを文字列置換する仕組みで、チャット UI 表示や
+SAIMemory 保存テキストには影響しない (TTS 専用フィルタ)。
+
+### 典型的な使用例
+
+GPT-SoVITS の MeCab 解析が「は」を助詞として誤判定して `wa` 読みしてしまうケース:
+
+```json
+{
+    "_comment": "「まはー」が wa 読みされる問題への対処",
+    "まはー": "マハー"
+}
+```
+
+カタカナ「ハ」は助詞解釈されないため、結果として `mahā ≈ mahaa` で読まれる。
+
+### フォーマット
+
+```json
+{
+    "_comment_anything_starting_with_underscore": "コメント扱い、置換対象にならない",
+    "誤読される語": "期待する読み方の表記",
+    "もう一つ": "another"
+}
+```
+
+- key: 誤読される元の文字列(完全一致で部分文字列置換)
+- value: 置き換え後の表記(TTS エンジンに渡される)
+- `_` で始まるキーはコメントとして無視される
+- キーが長い順に適用される(部分一致による意図しない置換を防止)
+
+### ファイル管理
+
+- `pronunciation_dict.json.template` が上流配布(git 管理)
+- `pronunciation_dict.json` がユーザー編集用(`.gitignore`)
+- 初回起動時にローカル版が無ければ template から自動コピー
+- `git pull` でユーザー編集が衝突しない仕組み(`registry.json` と同じ方式)
+
+### グローバル辞書の編集方法
+
+「全ペルソナ共通」の辞書は次の 2 ソースをマージして使われる:
+
+#### 1. 推奨: アドオン管理 UI から編集
+
+SAIVerse の **アドオン管理 → Voice TTS → 読み方辞書 (全ペルソナ共通)**
+で「キー (誤読される語) / 値 (読ませたい表記)」を直接追加・編集できる。
+変更は即座に DB に保存され、再起動なしで次回の発話から適用される
+(UI 辞書はキャッシュせず毎回 fresh 取得する設計のため)。
+
+> 本体側に `dict` 型 params のサポートが入っている必要あり (本体
+> `feature/addon-dict-param-type` のマージ後)。未対応バージョンの本体では
+> 「（未対応の型: dict）」と表示されるので、その場合はファイル辞書だけで運用。
+
+#### 2. 代替: ファイル辞書 (`pronunciation_dict.json`) を直接編集
+
+CLI で一括管理したい場合や、UI 対応前のバージョンの本体を使う場合は
+このファイルを編集する。1 と同じ JSON フォーマット。
+
+#### マージ規則
+
+- 同一キーが両方にあれば **UI が優先**
+- それぞれにしか無いキーは両方適用される (補完関係)
+
+### ペルソナ別オーバーライド (registry.json)
+
+特定ペルソナだけ別の読み方を持たせたい場合、`registry.json` の該当ペルソナ
+エントリに `pronunciation_dict` キーを追加:
+
+```json
+{
+    "Eris_city_a": {
+        "engine": "irodori",
+        "ref_audio": "samples/Eris_city_a/ref.wav",
+        "ref_text": "",
+        "params": {"num_steps": 32},
+        "pronunciation_dict": {
+            "ナチュレ": "なつる"
+        }
+    }
+}
+```
+
+### 適用順序 (高→低)
+
+1. ペルソナ別 (registry.json[<persona>].pronunciation_dict)
+2. グローバル (UI 辞書 ∪ ファイル辞書、UI が同一キーで優先)
+3. そのまま (置換ルールに該当しなければ)
+
+### 注意点
+
+- 平文の部分文字列置換なので、文書中の「は(助詞)」を全て置換するような書き方は避ける(固有名詞単位で登録)
+- regex は非対応(v1)
+- 実際の TTS 出力は MeCab 解析結果次第で変わるため、辞書を編集→再起動→聴いて確認、というイテレーションで調整する
