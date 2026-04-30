@@ -4,6 +4,74 @@
 
 ## [Unreleased]
 
+### ユーザー読み方辞書(発音上書き)を追加(feature/pronunciation-dict)
+
+GPT-SoVITS / Irodori-TTS の g2p (grapheme-to-phoneme) が固有名詞・専門語を
+誤読する場合、ユーザーが**辞書ファイルで置換ルールを書ける**仕組みを追加。
+
+例: 「まはー」が MeCab 解析で「ま+は(助詞)+ー」と誤分割されて `mawaa` 読み
+されてしまう問題に対し、辞書で「まはー → マハー」と書けばカタカナの「ハ」
+は助詞解釈されないため `mahā` ≈ `mahaa` と読まれる。
+
+#### 配置 (テンプレート方式、ユーザーローカル)
+
+- `voice_profiles/pronunciation_dict.json.template` (上流配布、git 管理)
+- `voice_profiles/pronunciation_dict.json` (`.gitignore`、初回起動時に自動コピー)
+
+#### 動作
+
+1. ペルソナ応答テキストを TTS エンジンに渡す**直前**に文字列置換
+2. チャット UI 表示や SAIMemory 保存テキストには影響しない (TTS 専用フィルタ)
+3. 適用順: **ペルソナ別 override (registry の `pronunciation_dict`) → グローバル**
+4. キーは長い順に適用 (部分一致による意図しない置換を防止)
+5. `_` で始まるキーはコメント扱いで無視
+
+#### 辞書フォーマット例
+
+```json
+{
+    "_comment": "コメントは _ で始めれば無視される",
+    "まはー": "マハー",
+    "SAIVerse": "サイバース"
+}
+```
+
+#### ペルソナ別オーバーライド (任意)
+
+`voice_profiles/registry.json` のペルソナエントリに `pronunciation_dict`
+キーを追加:
+
+```json
+{
+    "Eris_city_a": {
+        "engine": "irodori",
+        "ref_audio": "...",
+        "params": {...},
+        "pronunciation_dict": {
+            "ナチュレ": "なつる"
+        }
+    }
+}
+```
+
+#### 変更ファイル
+
+- `tools/speak/pronunciation_dict.py` (新規): 辞書ローダ + apply 関数
+- `tools/speak/playback_worker.py`: engine 呼び出し前に apply() を仕込む
+- `tools/speak/profiles.py`: AddonPersonaConfig 経由の場合も `pronunciation_dict`
+  を profile の top-level に引き上げる(engine の params に混じらないよう除外)
+- `voice_profiles/pronunciation_dict.json.template` (新規)
+- `.gitignore`: ローカル辞書を追記
+- `tests/test_pronunciation_dict.py` (新規): 15 件のユニットテスト
+
+#### 既知の限界
+
+- 平文置換のみ(regex 非対応、必要なら v2 で検討)
+- 置換結果が TTS エンジンで意図通り読まれるかは MeCab 解析次第。実際に
+  聴いて確認しながら辞書を調整する想定
+- 文書中の「は」を全て置換すると助詞「は」も置換されてしまう。固有名詞単位
+  で登録するのが基本
+
 ### ユーザー編集ファイルをテンプレート方式に変更(feature/template-based-user-config)
 
 `config/default.json` と `voice_profiles/registry.json` は **ユーザーが手元で編集する**前提のファイルだが、これらが git 管理下にあったため `git pull` 時に上流の更新と衝突し、毎回 `git stash → pull → stash pop` が必要だった。

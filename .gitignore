@@ -13,3 +13,4 @@ temp/
 # 上流が更新するのは .template のみで、こちらは各環境固有の値を持つ。
 config/default.json
 voice_profiles/registry.json
+voice_profiles/pronunciation_dict.json

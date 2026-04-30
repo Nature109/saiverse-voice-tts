@@ -98,19 +98,26 @@ def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, A
         # "gpt_sovits" (既定) or "irodori"。UI 未設定時や空文字は既定に倒す。
         engine_raw = params.get("engine") or "gpt_sovits"
         engine = str(engine_raw).strip() or "gpt_sovits"
-        # engine/再生系トグル/ref_* は params に含めず、それ以外のキーをエンジン固有
-        # パラメータとして通す(例: num_steps, truncation_factor, seed 等)。
+        # engine/再生系トグル/ref_*/pronunciation_dict は params に含めず、それ以外
+        # のキーをエンジン固有パラメータとして通す(例: num_steps, truncation_factor,
+        # seed 等)。
         _EXCLUDED_KEYS = {
             "_enabled", "ref_audio", "ref_text", "engine",
             "auto_speak", "server_side_playback", "client_side_playback",
-            "streaming", "output_device",
+            "streaming", "output_device", "pronunciation_dict",
         }
-        return {
+        # pronunciation_dict はトップレベルに引き上げる(playback_worker が
+        # profile.get("pronunciation_dict") で参照するため)
+        pronunciation_dict = params.get("pronunciation_dict")
+        result: Dict[str, Any] = {
             "engine": engine,
             "ref_audio": str(ref_audio),
             "ref_text": ref_text,
             "params": {k: v for k, v in params.items() if k not in _EXCLUDED_KEYS},
         }
+        if isinstance(pronunciation_dict, dict) and pronunciation_dict:
+            result["pronunciation_dict"] = pronunciation_dict
+        return result
     except Exception as exc:
         LOGGER.debug("addon_config unavailable for persona profile: %s", exc)
         return None
