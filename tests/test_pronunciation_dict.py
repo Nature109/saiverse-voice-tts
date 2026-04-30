@@ -8,12 +8,14 @@
 - ペルソナ別オーバーライド優先
 - 不正な JSON 値の無視
 - _ で始まるコメントキーの無視
+- アドオン管理 UI 経由のグローバル辞書とファイル辞書のマージ
 """
 from __future__ import annotations
 
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -26,12 +28,25 @@ if str(_PACK_ROOT) not in sys.path:
 def _import_module():
     """テストごとに pronunciation_dict モジュールをフレッシュにロードする。
 
-    モジュール内のキャッシュ (`_cached_global_entries`) を分離するため。
+    モジュール内のキャッシュ (`_cached_file_entries`) を分離するため。
     """
     import importlib
     if "tools.speak.pronunciation_dict" in sys.modules:
         del sys.modules["tools.speak.pronunciation_dict"]
     return importlib.import_module("tools.speak.pronunciation_dict")
+
+
+def _install_fake_addon_config(get_params_func) -> None:
+    """`saiverse.addon_config.get_params` をテスト用関数に差し替える。"""
+    pkg = sys.modules.get("saiverse") or types.ModuleType("saiverse")
+    sys.modules["saiverse"] = pkg
+    fake = types.ModuleType("saiverse.addon_config")
+    fake.get_params = get_params_func  # type: ignore[attr-defined]
+    sys.modules["saiverse.addon_config"] = fake
+
+
+def _uninstall_fake_addon_config() -> None:
+    sys.modules.pop("saiverse.addon_config", None)
 
 
 class PronunciationDictApplyTests(unittest.TestCase):
@@ -189,6 +204,112 @@ class PronunciationDictApplyTests(unittest.TestCase):
             },
         )
         self.assertEqual(result, "MAHA-SAN")
+
+
+class PronunciationDictUIMergeTests(unittest.TestCase):
+    """アドオン管理 UI のグローバル辞書とファイル辞書のマージ挙動検証。"""
+
+    def setUp(self):
+        self.tmp_handle = tempfile.TemporaryDirectory()
+        self.tmp_dir = Path(self.tmp_handle.name)
+        self.dict_path = self.tmp_dir / "pronunciation_dict.json"
+        self.template_path = self.tmp_dir / "pronunciation_dict.json.template"
+
+        self.pd = _import_module()
+        self._orig_dict_path = self.pd._DICT_PATH
+        self._orig_template_path = self.pd._DICT_TEMPLATE_PATH
+        self.pd._DICT_PATH = self.dict_path
+        self.pd._DICT_TEMPLATE_PATH = self.template_path
+        self.pd.reload()
+
+    def tearDown(self):
+        self.pd._DICT_PATH = self._orig_dict_path
+        self.pd._DICT_TEMPLATE_PATH = self._orig_template_path
+        self.pd.reload()
+        _uninstall_fake_addon_config()
+        self.tmp_handle.cleanup()
+
+    def _write_file_dict(self, data: dict) -> None:
+        self.dict_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.pd.reload()
+
+    def test_ui_only_dict_applied(self):
+        """ファイル辞書なし、UI 辞書だけで apply されるケース。"""
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {"まはー": "マハー"}}
+        _install_fake_addon_config(fake_get_params)
+
+        self.assertEqual(self.pd.apply("こんにちは、まはー"), "こんにちは、マハー")
+
+    def test_ui_overrides_file_on_collision(self):
+        """同一キーがファイルと UI 両方にある場合、UI が優先される。"""
+        self._write_file_dict({"まはー": "FROM_FILE"})
+
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {"まはー": "FROM_UI"}}
+        _install_fake_addon_config(fake_get_params)
+
+        self.assertEqual(self.pd.apply("まはー"), "FROM_UI")
+
+    def test_ui_and_file_complement(self):
+        """ファイルと UI で異なるキーは両方適用される。"""
+        self._write_file_dict({"まはー": "マハー"})
+
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {"SAIVerse": "サイバース"}}
+        _install_fake_addon_config(fake_get_params)
+
+        self.assertEqual(
+            self.pd.apply("まはー と SAIVerse"),
+            "マハー と サイバース",
+        )
+
+    def test_empty_ui_dict_falls_through_to_file(self):
+        """UI 辞書が空 dict なら、ファイル辞書だけで動く。"""
+        self._write_file_dict({"まはー": "マハー"})
+
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {}}
+        _install_fake_addon_config(fake_get_params)
+
+        self.assertEqual(self.pd.apply("まはー"), "マハー")
+
+    def test_addon_config_unavailable_falls_back_silently(self):
+        """saiverse.addon_config が import できない環境でもファイル辞書で動く。"""
+        _uninstall_fake_addon_config()
+        self._write_file_dict({"まはー": "マハー"})
+
+        # import エラーは握りつぶされ、ファイル辞書だけで apply される
+        self.assertEqual(self.pd.apply("まはー"), "マハー")
+
+    def test_get_params_raising_falls_back_silently(self):
+        """addon_config.get_params が例外を投げてもファイル辞書で動く。"""
+        def fake_get_params(addon, persona_id=None):
+            raise RuntimeError("DB not initialized")
+        _install_fake_addon_config(fake_get_params)
+        self._write_file_dict({"まはー": "マハー"})
+
+        self.assertEqual(self.pd.apply("まはー"), "マハー")
+
+    def test_persona_dict_still_takes_precedence_over_ui(self):
+        """ペルソナ別 (registry 由来) は UI グローバルより優先される。"""
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {"まはー": "FROM_UI"}}
+        _install_fake_addon_config(fake_get_params)
+
+        result = self.pd.apply("まはー", persona_dict={"まはー": "FROM_PERSONA"})
+        self.assertEqual(result, "FROM_PERSONA")
+
+    def test_longer_key_precedence_across_ui_and_file(self):
+        """長いキー優先のソートはファイル+UI のマージ後に適用される。"""
+        self._write_file_dict({"まはー": "MAHA"})  # 短いキー (file)
+
+        def fake_get_params(addon, persona_id=None):
+            return {"pronunciation_dict": {"まはーさん": "MAHA-SAN"}}  # 長いキー (UI)
+        _install_fake_addon_config(fake_get_params)
+
+        # 長いキー (UI) が先に当たり "まはーさん" が "MAHA-SAN" に置換される
+        self.assertEqual(self.pd.apply("ようこそ、まはーさん"), "ようこそ、MAHA-SAN")
 
 
 if __name__ == "__main__":
