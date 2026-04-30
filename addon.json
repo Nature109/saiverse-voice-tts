@@ -40,6 +40,14 @@
             "persona_configurable": true
         },
         {
+            "key": "pronunciation_dict",
+            "label": "読み方辞書 (ペルソナ別)",
+            "description": "TTS エンジンが固有名詞などを誤読する場合、合成直前に文字列置換で読みを補正します。例: キー「まはー」/ 値「マハー」と書くと、本文の『まはー』が『マハー』に置換されてから音声合成されます。チャット表示や記憶には影響しません。グローバル辞書 (voice_profiles/pronunciation_dict.json) より優先されます。",
+            "type": "dict",
+            "default": {},
+            "persona_configurable": true
+        },
+        {
             "key": "server_side_playback",
             "label": "サーバー側再生",
             "description": "バックエンドPCのスピーカーから自動再生します。ブラウザを開いていない環境で音を鳴らしたい場合などにONにします。デフォルトOFF。",

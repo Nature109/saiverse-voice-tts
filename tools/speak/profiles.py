@@ -79,6 +79,27 @@ def _resolve_ref_audio(ref_audio: Optional[str]) -> Optional[str]:
     return str(resolved)
 
 
+def _try_get_ui_pronunciation_dict(persona_id: Optional[str]) -> Optional[Dict[str, str]]:
+    """UI (アドオン管理画面) で設定されたペルソナ別 pronunciation_dict のみを取得する。
+
+    `_try_addon_persona_config` は ref_audio が UI 未設定だと None を返してしまうため、
+    「UI で読み方辞書だけ設定し、ref_audio は registry.json で運用」のような構成だと
+    UI の辞書が取り込まれない。本ヘルパーは ref_audio の有無に関係なく辞書だけを
+    抽出することで、その経路でも UI 辞書を有効化する。
+    """
+    if not persona_id:
+        return None
+    try:
+        from saiverse.addon_config import get_params  # type: ignore
+        params = get_params(_ADDON_NAME, persona_id=persona_id)
+        pd = params.get("pronunciation_dict")
+        if isinstance(pd, dict) and pd:
+            return pd
+    except Exception as exc:
+        LOGGER.debug("addon_config unavailable for pronunciation_dict: %s", exc)
+    return None
+
+
 def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """AddonPersonaConfig から参照音声を取得する（最優先）。
 
@@ -153,6 +174,13 @@ def get_profile(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
 
     entry["ref_audio"] = _resolve_ref_audio(entry.get("ref_audio"))
+
+    # registry 経由でも UI 設定の pronunciation_dict は反映する (registry の辞書を上書き)。
+    ui_pd = _try_get_ui_pronunciation_dict(persona_id)
+    if ui_pd:
+        entry["pronunciation_dict"] = ui_pd
+        LOGGER.debug("pronunciation_dict source=addon_ui persona=%s", persona_id)
+
     return entry
 
 
