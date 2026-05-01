@@ -105,20 +105,38 @@ def get_effective_params(persona_id: Optional[str]) -> Dict[str, Any]:
     return _get_effective_params(persona_id)
 
 
-def _audio_path(message_id: str) -> str:
-    return f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+def _audio_path(message_id: str, version: Optional[str] = None) -> str:
+    """フロント表示用の audio URL。
+
+    ``version`` を付けるとクエリパラメータ ``?v=<version>`` を付与する。
+    再生成 (同じ message_id でも新しい合成) のたびに version を変えれば、
+    フロントの metadata 値が変化することを React 側で検知できるので、
+    再生成中スピナーの完了判定や ``<audio>`` キャッシュバストに利用できる。
+    FastAPI 側のルート照合は path だけ見るので、クエリ追加で挙動は変わらない。
+    """
+    base = f"/api/addon/{_ADDON_NAME}/audio/{message_id}"
+    return f"{base}?v={version}" if version else base
 
 
-def _audio_stream_url(message_id: str) -> str:
-    return f"/api/addon/{_ADDON_NAME}/audio/{message_id}/stream"
+def _audio_stream_url(message_id: str, version: Optional[str] = None) -> str:
+    base = f"/api/addon/{_ADDON_NAME}/audio/{message_id}/stream"
+    return f"{base}?v={version}" if version else base
 
 
-def _notify_stream_ready(message_id: Optional[str]) -> None:
+def _notify_stream_ready(message_id: Optional[str], version: Optional[str] = None) -> None:
     """Broadcast audio_ready at stream open time.
 
     ストリーミング推論で使用。合成完了を待たずに発火することで、クライアント側
-    再生がレイテンシ少なく話し始められる。event.data には stream URL と
-    最終 URL の両方を含める (executor は stream URL を優先、無ければ audio_path)。
+    再生がレイテンシ少なく話し始められる。
+
+    重要: ここでは ``audio_stream_url`` だけを通知する。``audio_path`` を
+    早期に立てると、合成完了前に <audio> 要素が ``/audio/{msg}?v=NEW`` を
+    取得して旧 wav 内容を新 URL でブラウザキャッシュしてしまう (URL は新版に
+    更新されるが、当該 URL が指す ``audio_file`` メタデータは合成完了まで旧版
+    のまま、というラグが原因)。
+    ``audio_path`` の更新と SSE 通知は ``_notify_audio_ready`` (合成完了時)
+    に集約することで、フロント側からは「URL が新版になった瞬間 = ファイルも
+    新版」というアトミックな更新に見える。
     """
     if not message_id:
         LOGGER.warning(
@@ -126,8 +144,7 @@ def _notify_stream_ready(message_id: Optional[str]) -> None:
             "Streaming client-side playback will not be triggered."
         )
         return
-    stream_url = _audio_stream_url(message_id)
-    audio_path = _audio_path(message_id)
+    stream_url = _audio_stream_url(message_id, version=version)
     try:
         from saiverse.addon_metadata import set_metadata  # type: ignore
         set_metadata(
@@ -135,14 +152,6 @@ def _notify_stream_ready(message_id: Optional[str]) -> None:
             addon_name=_ADDON_NAME,
             key="audio_stream_url",
             value=stream_url,
-        )
-        # audio_path は合成完了後にファイルへ解決される URL。この時点で metadata
-        # に入れておくと、後続で合成が完了すれば自動でバブル再生でも使える。
-        set_metadata(
-            message_id=message_id,
-            addon_name=_ADDON_NAME,
-            key="audio_path",
-            value=audio_path,
         )
     except Exception as exc:
         LOGGER.warning("notify_stream_ready set_metadata failed for msg=%s: %s", message_id, exc)
@@ -152,7 +161,7 @@ def _notify_stream_ready(message_id: Optional[str]) -> None:
             addon=_ADDON_NAME,
             event="audio_ready",
             message_id=message_id,
-            data={"audio_stream_url": stream_url, "audio_path": audio_path},
+            data={"audio_stream_url": stream_url},
         )
     except Exception as exc:
         LOGGER.warning("emit_addon_event(stream_ready) failed for msg=%s: %s", message_id, exc)
@@ -161,17 +170,26 @@ def _notify_stream_ready(message_id: Optional[str]) -> None:
 def _notify_audio_ready(
     message_id: Optional[str],
     wav_path: Path,
-    emit_event: bool = True,
+    event_name: str = "audio_ready",
+    version: Optional[str] = None,
 ) -> None:
-    """Register wav metadata and (optionally) broadcast an audio_ready event.
+    """Register wav metadata and broadcast a completion event.
 
-    ``emit_event=False`` はストリーミング合成後のフォローアップ用途。既に
-    ``_notify_stream_ready`` で event を発火済みのため、完成 wav の metadata
-    だけを更新する (audio_file を設定してバブル再生ボタンが正式なファイルを
-    返せるようにする)。
+    合成完了時に呼ばれる。ここで初めて ``audio_file`` (バックエンドが配信する
+    実 wav パス) と ``audio_path`` (フロント向け URL、cache-bust 用 ?v= 付き)
+    がセットになって更新される。アトミックなため、フロント側からは
+    「audio_path URL が新版になった瞬間 = audio_file も新版」と見える。
 
-    ``emit_event=True`` (デフォルト) は非ストリーミング経路用。完成時に
-    初めて URL が確定するので、metadata と SSE の両方を発火する。
+    Args:
+        event_name:
+          - ``"audio_ready"`` (デフォルト): 非ストリーミング合成および
+            初回完了通知用。frontend の ``auto_play_tts`` client_action が
+            これを購読しているので発火すると自動再生が走る。
+          - ``"audio_completed"``: ストリーミング合成の完了通知用。auto_play_tts
+            は購読していないため二重発火しない。一方で
+            ``useAddonEvents`` が任意のイベントで ``addonMetadata`` を
+            マージするので、フロントの ``audio_path`` 値は更新される
+            (= bubble の <audio> 要素が新 URL を取り直す)。
     """
     if not message_id:
         LOGGER.warning(
@@ -179,7 +197,7 @@ def _notify_audio_ready(
             "Bubble playback button will not be registered for this utterance."
         )
         return
-    audio_path = _audio_path(message_id)
+    audio_path = _audio_path(message_id, version=version)
     meta_ok = False
     event_ok = False
     try:
@@ -201,21 +219,20 @@ def _notify_audio_ready(
         meta_ok = True
     except Exception as exc:
         LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
-    if emit_event:
-        try:
-            from saiverse.addon_events import emit_addon_event  # type: ignore
-            emit_addon_event(
-                addon=_ADDON_NAME,
-                event="audio_ready",
-                message_id=message_id,
-                data={"audio_path": audio_path},
-            )
-            event_ok = True
-        except Exception as exc:
-            LOGGER.warning("emit_addon_event failed for msg=%s: %s", message_id, exc)
+    try:
+        from saiverse.addon_events import emit_addon_event  # type: ignore
+        emit_addon_event(
+            addon=_ADDON_NAME,
+            event=event_name,
+            message_id=message_id,
+            data={"audio_path": audio_path},
+        )
+        event_ok = True
+    except Exception as exc:
+        LOGGER.warning("emit_addon_event(%s) failed for msg=%s: %s", event_name, message_id, exc)
     LOGGER.debug(
-        "notify_audio_ready: msg=%s metadata=%s event=%s (emit=%s)",
-        message_id, meta_ok, event_ok, emit_event,
+        "notify_audio_ready: msg=%s metadata=%s event=%s name=%s",
+        message_id, meta_ok, event_ok, event_name,
     )
 
 
@@ -389,7 +406,7 @@ class _TTSWorker:
                         # 側で /stream エンドポイントは arrayBuffer バッファ展開を
                         # スキップして素通しするようになったため、クライアントは
                         # ここからチャンクを progressive に受け取って早期再生できる。
-                        _notify_stream_ready(message_id)
+                        _notify_stream_ready(message_id, version=job_id)
                     first_chunk_at = time.time()
                     LOGGER.debug(
                         "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
@@ -432,7 +449,10 @@ class _TTSWorker:
             # ストリーミング経路は _notify_stream_ready で先に audio_ready を
             # 発火済み。ここでは完成 wav の metadata (audio_file) だけ更新し、
             # event の重複発火を避ける。
-            _notify_audio_ready(message_id, wav_path, emit_event=False)
+            # ストリーミング経路は stream_ready で audio_ready 発火済み。
+            # ここでは完成 wav の metadata を確定させ、別イベント名で通知して
+            # auto_play_tts の二重発火を避けつつフロントの addonMetadata を更新する。
+            _notify_audio_ready(message_id, wav_path, event_name="audio_completed", version=job_id)
         except Exception as exc:
             LOGGER.warning("Failed to save streamed wav: %s", exc)
 
@@ -535,7 +555,7 @@ class _TTSWorker:
             LOGGER.warning("Failed to save wav: %s", exc)
 
         if wav_path is not None:
-            _notify_audio_ready(job.message_id, wav_path)
+            _notify_audio_ready(job.message_id, wav_path, version=job.job_id)
 
         if server_side_playback:
             self._play(result.audio, result.sample_rate, output_device=resolved_device)
@@ -571,13 +591,18 @@ class _TTSWorker:
             self._thread.start()
             atexit.register(self.shutdown)
 
-    def enqueue(self, text: str, persona_id: Optional[str]) -> str:
+    def enqueue(
+        self,
+        text: str,
+        persona_id: Optional[str],
+        message_id: Optional[str] = None,
+    ) -> str:
         self.start()
         job_id = uuid.uuid4().hex
-        # Capture message_id here: the persona_context is valid at enqueue
-        # time (tool invocation) but may be gone by the time the worker
-        # thread actually picks up the job.
-        captured_msg_id = _get_active_message_id()
+        # 通常経路 (speak_as_persona ツール) では contextvars から message_id を
+        # 取得する。再生成 API のように context を持たない呼び出しは引数で
+        # 明示的に渡せるようにする。
+        captured_msg_id = message_id or _get_active_message_id()
         LOGGER.debug(
             "enqueue: job=%s persona=%s message_id=%s",
             job_id, persona_id, captured_msg_id,
@@ -605,5 +630,18 @@ class _TTSWorker:
 _worker = _TTSWorker()
 
 
-def enqueue_tts(text: str, persona_id: Optional[str]) -> str:
-    return _worker.enqueue(text, persona_id)
+def enqueue_tts(
+    text: str,
+    persona_id: Optional[str],
+    message_id: Optional[str] = None,
+) -> str:
+    """TTS ジョブを enqueue する。
+
+    Args:
+        text: 合成テキスト
+        persona_id: 発話ペルソナ
+        message_id: バブル紐付け用 ID。None なら呼び出し時の contextvars から取得
+            (通常の speak_as_persona ツール経路)。再生成 API のように context が
+            無い経路は明示的に渡す。
+    """
+    return _worker.enqueue(text, persona_id, message_id=message_id)
