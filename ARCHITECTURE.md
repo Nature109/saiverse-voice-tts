@@ -281,13 +281,63 @@ t≈0.5〜1 第一チャンク yield → 再生開始 ← ★話し始め(余裕
 t=N      完了
 ```
 
-## Playbook 統合
+## 発話経路への接続
 
-`playbooks/public/sub_speak.json` で本体の `builtin_data/playbooks/public/sub_speak.json` を上書き。
+v0.4.0 以降は本体側の **`server_hooks`** 機構経由で `persona_speak` イベントを
+購読する。本体の `sea/runtime_emitters.py` の `emit_speak` / `emit_say` 末尾で
+`dispatch_hook("persona_speak", ...)` が ThreadPoolExecutor に submit され、
+本パックの `speak_hook.on_persona_speak` がバックグラウンドスレッドで呼ばれる。
 
-本体オリジナルは `compose(LLM) → process_body(control_body)` の2ノード構成。拡張パック版はこれに `tts_speak(speak_as_persona)` を末尾追加した3ノード構成。
+```
+本体: persona が発話
+   │
+   ├─ emit_speak / emit_say
+   │    ├─ Building history 記録
+   │    ├─ set_active_message_id
+   │    ├─ gateway_handle_ai_replies
+   │    └─ dispatch_hook("persona_speak", text_for_voice=..., message_id=..., ...)
+   │           │
+   │           ▼ ThreadPoolExecutor (max_workers=4) で隔離実行
+   │
+   ▼
+拡張パック: speak_hook.on_persona_speak
+   │
+   ├─ get_effective_params(persona_id) で auto_speak チェック
+   ├─ clean_text_for_tts(text_for_voice)
+   └─ enqueue_tts(cleaned, persona_id, message_id)  ← 既存の TTS Worker キューへ
+```
 
-SAIVerse の playbook 優先順(`user_data > expansion_data > builtin_data`)により、このパックが `expansion_data/` に配置されている限り本体オリジナルを上書きします。
+ハンドラ宣言は `addon.json`:
+
+```json
+{
+    "server_hooks": [
+        {
+            "event": "persona_speak",
+            "handler": "speak_hook:on_persona_speak"
+        }
+    ]
+}
+```
+
+本体は本パックが有効化されている時のみハンドラを register し、無効化トグルで
+unregister する。ハンドラが例外を投げても本体側で隔離されるため、発話処理本体
+が止まることはない。
+
+### 旧 Playbook 上書き方式 (v0.3.x まで)
+
+v0.3.x までは `playbooks/public/sub_speak.json` で本体の `builtin_data/playbooks/public/sub_speak.json`
+を上書きし、末尾に `tts_speak(speak_as_persona)` ノードを追加する 3 ノード構成
+で TTS を発火していた。
+
+2026-05-01 の認知モデル Phase C-2/3 で本体の発話経路が Track ベース
+(`track_user_conversation` / `track_external` 等) に刷新され、デフォルトの
+ユーザー会話が `sub_speak` を経由しなくなったため、この方式は破綻した
+(v0.4.0 で `server_hooks` 経由に移行)。
+
+`speak_as_persona` ツール自体は v0.4.0 以降も残しているため、ペルソナが
+`/spell speak_as_persona text='...'` で明示的に発話制御するケースは引き続き
+動作する。
 
 ## 設計上の制約と拡張方針
 
