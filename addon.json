@@ -2,7 +2,7 @@
     "name": "saiverse-voice-tts",
     "display_name": "Voice TTS",
     "description": "GPT-SoVITS / Irodori-TTS によるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "params_schema": [
         {
             "key": "auto_speak",
@@ -77,6 +77,12 @@
             "persona_configurable": false,
             "collapsible": true,
             "default_collapsed": true
+        }
+    ],
+    "server_hooks": [
+        {
+            "event": "persona_speak",
+            "handler": "speak_hook:on_persona_speak"
         }
     ],
     "ui_extensions": {

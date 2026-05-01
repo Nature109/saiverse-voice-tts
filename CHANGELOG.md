@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### v0.4.0: server_hooks 経由の TTS 発火に移行 (feature/voice-tts-speak-hook)
+
+SAIVerse 本体の認知モデル Phase C-2/3 (2026-05-01) で発話経路が Track ベースに
+刷新され、旧 `sub_speak` Playbook が共通経路でなくなった。`expansion_data/<addon>/playbooks/public/sub_speak.json`
+で本体を上書きして末尾に `tts_speak` ノードを足す方式は新 Track Playbook
+(`track_user_conversation` / `track_external` 等) を経由しないため、デフォルトの
+ユーザー会話で TTS が完全に無音になっていた。
+
+本体側に追加された **`server_hooks`** 機構経由で `persona_speak` イベントを
+購読する形に切り替え、Playbook 構造に依存せず発話の最終共通経路 (`emit_speak` /
+`emit_say`) から直接呼ばれるようにした。
+
+#### 変更点
+
+- **新規**: `speak_hook.py` — `on_persona_speak(persona_id, text_for_voice, message_id, **kwargs)`
+  ハンドラ。本体の `<in_heart>` 除去・spell ブロック処理済みテキストを受け取り、
+  `clean_text_for_tts()` を通して `enqueue_tts()` に投入する
+- **`addon.json`**: `server_hooks` セクションを追加。`event: "persona_speak"` に
+  `handler: "speak_hook:on_persona_speak"` を宣言
+- **削除**: `playbooks/public/sub_speak.json` — 旧 override は撤去。残すと旧
+  `meta_simple_speak` 経路で本体 hook と override の両方から TTS が呼ばれ
+  二重発火する
+- `tools/speak/schema.py` の `speak_as_persona` ツール自体は維持 (将来的な
+  `/spell speak_as_persona` での明示発話制御に備える)
+- `version`: `0.3.0` → `0.4.0`
+
+#### 必要な本体バージョン
+
+- `saiverse/addon_hooks.py` および `addon.json` の `server_hooks` セクション対応が
+  入った本体ビルド (feature/voice-tts-speak-hook ブランチ以降)
+- 旧本体で 0.4.0 を動かすと、`server_hooks` 宣言は無視され TTS が動かなくなる
+
 ### ユーザー読み方辞書(発音上書き)を追加(feature/pronunciation-dict)
 
 GPT-SoVITS / Irodori-TTS の g2p (grapheme-to-phoneme) が固有名詞・専門語を
