@@ -79,6 +79,17 @@ def _audio_stream_module() -> Any:
     return sys.modules.get("tools._loaded.speak.audio_stream")
 
 
+def _playback_worker_module() -> Any:
+    """同様に playback_worker モジュールを sys.modules から取得。
+
+    host の addon_external_loader が `tools.speak.*` への通常 import を
+    block するので、tool loader 登録名 `tools._loaded.speak.playback_worker`
+    を直接参照する。
+    """
+    import sys
+    return sys.modules.get("tools._loaded.speak.playback_worker")
+
+
 def subscribe_stream(message_id: str) -> Any:
     mod = _audio_stream_module()
     if mod is None:
@@ -202,8 +213,86 @@ async def stream_audio(
 
 
 # ---------------------------------------------------------------------------
-# GET /audio-devices
+# POST /regenerate
 # ---------------------------------------------------------------------------
+@router.post("/regenerate")
+async def regenerate_audio(
+    body: dict,
+    manager: Any = Depends(_get_manager_dep()),
+) -> dict:
+    """既存メッセージの音声を再生成する。
+
+    バブルボタン (id: regenerate_audio) のクリックで呼ばれる。host 側の
+    AddonBubbleButtons.tsx は POST body に
+    ``{"message_id", "text", "persona_id"}`` を載せて送る。pack 側はこの
+    context をそのまま使って TTS を再 enqueue する (現在の pronunciation_dict
+    が自動で適用される)。
+
+    text や persona_id が body に無いケース (古いフロント等) のフォールバック
+    として、message_id だけ渡されたら ``manager.building_histories`` を走査
+    して text + persona_id を引き当てる。
+
+    Returns:
+        ``{"status": "enqueued", "job_id": <id>, "source": "body"|"history"}``
+    """
+    message_id = body.get("message_id")
+    if not message_id:
+        raise HTTPException(status_code=400, detail="message_id is required")
+
+    text = body.get("text")
+    persona_id = body.get("persona_id")
+    source = "body"
+
+    # フォールバック: body に context が無ければ host 内 building_histories を走査
+    if not text or not persona_id:
+        if manager is None:
+            raise HTTPException(
+                status_code=400,
+                detail="text and persona_id required when manager is unavailable",
+            )
+        histories = getattr(manager, "building_histories", None) or {}
+        found = None
+        for _bid, history in histories.items():
+            for msg in history:
+                if msg.get("message_id") == message_id or msg.get("id") == message_id:
+                    found = msg
+                    break
+            if found is not None:
+                break
+        if found is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"message_id {message_id} not found in building histories",
+            )
+        text = text or found.get("content") or ""
+        persona_id = persona_id or found.get("persona_id")
+        source = "history"
+
+    if not text:
+        raise HTTPException(status_code=400, detail="message text is empty; nothing to synthesize")
+    if not persona_id:
+        raise HTTPException(status_code=400, detail="persona_id is required (assistant message expected)")
+
+    # pack 内 tool モジュールは host loader 経由で sys.modules に登録される。
+    # 通常の `from tools.speak...` import は addon_external_loader で block される。
+    pw = _playback_worker_module()
+    if pw is None:
+        LOGGER.error(
+            "regenerate_audio: tools._loaded.speak.playback_worker not in sys.modules. "
+            "host tool loader が pack のツールを未ロード?"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="playback_worker module unavailable; host tool loader not initialised",
+        )
+    job_id = pw.enqueue_tts(text=str(text), persona_id=str(persona_id), message_id=str(message_id))
+    LOGGER.info(
+        "regenerate_audio: enqueued job=%s message_id=%s persona=%s source=%s len=%d",
+        job_id, message_id, persona_id, source, len(str(text)),
+    )
+    return {"status": "enqueued", "job_id": job_id, "source": source}
+
+
 # ---------------------------------------------------------------------------
 # POST /client_action_failed
 # ---------------------------------------------------------------------------

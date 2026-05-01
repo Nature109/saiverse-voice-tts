@@ -88,6 +88,14 @@
                 "action": "play_audio",
                 "metadata_key": "audio_path",
                 "show_when": "metadata_exists"
+            },
+            {
+                "id": "regenerate_audio",
+                "icon": "refresh-cw",
+                "label": "音声を再生成",
+                "tool": "regenerate",
+                "metadata_key": "audio_path",
+                "show_when": "metadata_exists"
             }
         ],
         "client_actions": [
