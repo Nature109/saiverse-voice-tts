@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 再生成ボタンを常時押せるようにする
+
+- `addon.json`: `regenerate_audio` バブルボタンの `show_when` を
+  `metadata_exists` から `always` に変更。
+  - 旧仕様だと `audio_path` メタデータが無いメッセージ
+    (TTS 合成失敗、auto_speak OFF 時、アドオン無効中の発話など) では
+    再生成ボタンも pending スピナー扱い (disabled) になり永遠に触れない
+    バグがあった。
+  - メタデータが無いことは「再生成できない理由」にはならないので、
+    `regenerate_audio` は常に visible とする。`play_audio` は引き続き
+    `metadata_exists` (鳴らす音声が無いと意味が無いため)。
+
 ### v0.4.0: server_hooks 経由の TTS 発火に移行 (feature/voice-tts-speak-hook)
 
 SAIVerse 本体の認知モデル Phase C-2/3 (2026-05-01) で発話経路が Track ベースに
