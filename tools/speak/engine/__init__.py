@@ -14,6 +14,12 @@ def create_engine(name: str, engine_config: Dict[str, Any]) -> TTSEngine:
     if name == "irodori":
         from .irodori import IrodoriEngine
         return IrodoriEngine(engine_config)
+    if name == "openai_tts":
+        from .openai_tts import OpenAITTSEngine
+        return OpenAITTSEngine(engine_config)
+    if name == "elevenlabs":
+        from .elevenlabs import ElevenLabsEngine
+        return ElevenLabsEngine(engine_config)
     raise ValueError(f"Unknown TTS engine: {name}")
 
 

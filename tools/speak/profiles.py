@@ -79,38 +79,51 @@ def _resolve_ref_audio(ref_audio: Optional[str]) -> Optional[str]:
     return str(resolved)
 
 
-def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """AddonPersonaConfig から参照音声を取得する（最優先）。
+_API_ENGINES = {"openai_tts", "elevenlabs"}
 
-    host 側の saiverse.addon_config.get_params が ref_audio / ref_text を
-    含む場合にのみ有効なプロファイルとして返す。ref_audio が無い場合は
-    None を返し、後続のフォールバックに移る。
+
+def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """AddonPersonaConfig から参照音声 / API エンジン設定を取得する (最優先)。
+
+    プロファイルとして有効と判定する条件:
+    - ローカルエンジン (gpt_sovits / irodori): ``ref_audio`` がセットされている
+    - API エンジン (openai_tts / elevenlabs): ``ref_audio`` 不要
+      (ref_audio は無視される。代わりに voice / voice_id がエンジン側で必要)
+
+    上記いずれにも該当しなければ None を返し、後続の registry.json
+    フォールバックに移る。
     """
     if not persona_id:
         return None
     try:
         from saiverse.addon_config import get_params  # type: ignore
         params = get_params(_ADDON_NAME, persona_id=persona_id)
-        ref_audio = params.get("ref_audio")
-        if not ref_audio:
-            return None
-        ref_text = params.get("ref_text", "")
-        # "gpt_sovits" (既定) or "irodori"。UI 未設定時や空文字は既定に倒す。
+        # "gpt_sovits" (既定) or "irodori" / "openai_tts" / "elevenlabs"。
+        # UI 未設定時や空文字は既定に倒す。
         engine_raw = params.get("engine") or "gpt_sovits"
         engine = str(engine_raw).strip() or "gpt_sovits"
-        # engine/再生系トグル/ref_*/pronunciation_dict は params に含めず、それ以外
-        # のキーをエンジン固有パラメータとして通す(例: num_steps, truncation_factor,
-        # seed 等)。pronunciation_dict は addon UI ではグローバル設定なので
-        # 個別 profile には引き上げない (pronunciation_dict.py 側でグローバル
-        # として直接ロードする)。
+        ref_audio = params.get("ref_audio")
+        # ローカルエンジンは ref_audio がないとプロファイル成立とみなさない
+        # (registry.json フォールバックに移行させる)。API エンジンは
+        # ref_audio が無くてもプロファイル成立とする。
+        if engine not in _API_ENGINES and not ref_audio:
+            return None
+        ref_text = params.get("ref_text", "")
+        # 以下は params に含めず除外:
+        # - addon フレームワーク内部 / UI トグル ( _enabled, server_side_playback 等)
+        # - profile top-level に独立して載るもの (ref_audio, ref_text, engine)
+        # - pronunciation_dict (addon UI ではグローバル設定。pronunciation_dict.py
+        #   が直接ロードする)
+        # - API key 系 (engine が addon_config から fresh に解決する)
         _EXCLUDED_KEYS = {
             "_enabled", "ref_audio", "ref_text", "engine",
             "auto_speak", "server_side_playback", "client_side_playback",
             "streaming", "output_device", "pronunciation_dict",
+            "openai_api_key", "elevenlabs_api_key",
         }
         return {
             "engine": engine,
-            "ref_audio": str(ref_audio),
+            "ref_audio": str(ref_audio) if ref_audio else None,
             "ref_text": ref_text,
             "params": {k: v for k, v in params.items() if k not in _EXCLUDED_KEYS},
         }

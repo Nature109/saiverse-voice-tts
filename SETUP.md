@@ -152,6 +152,98 @@ Get-Content $log -Wait -Tail 0 | Select-String "Irodori|speak_as_persona|first c
 
 通常は触らなくて OK。チューニングしたい場合のエンジン別パラメータ一覧は [voice_profiles/README.md](voice_profiles/README.md#params-に指定できる項目エンジン別) を参照してください。`truncation_factor=0.75` は `irodori.py` 内のハードコード(ゴミ音声抑制の要で変更非推奨、設計理由は [ARCHITECTURE.md](ARCHITECTURE.md) 参照)。
 
+## クラウド TTS エンジン (OpenAI / ElevenLabs) を使う場合
+
+GPU を持たないユーザー向けの選択肢。**追加のソフトウェアインストール不要**で、API key を入れるだけで使えます。
+
+### OpenAI TTS のセットアップ
+
+#### 1. API key 取得
+
+1. https://platform.openai.com/api-keys にアクセスしてサインイン
+2. **Create new secret key** → name 入力 (例: `saiverse-tts`) → **Create**
+3. 表示された `sk-...` 形式の key を **その場でコピー** (再表示は不可)
+4. 課金設定: https://platform.openai.com/settings/organization/billing で **クレジットカード登録**(API は使った分だけの後払い、$5 程度を最低 deposit する形式)
+
+#### 2. SAIVerse に登録
+
+1. アドオン管理 → Voice TTS を展開 → デフォルト (全ペルソナ共通) の中の「**OpenAI API Key**」を展開して貼り付け
+   - もしくは環境変数 `OPENAI_API_KEY` を `.env` に書いてもOK (本体既存の OpenAI 設定をそのまま流用可)
+2. ペルソナ別設定でペルソナを選択 → 「**TTS エンジン**」を `openai_tts` に変更
+3. 「**OpenAI 音声**」から voice を選択
+   - alloy / echo / fable / onyx / nova / shimmer / ash / sage / coral の 9 種から好みのものを
+   - 試聴: https://platform.openai.com/docs/guides/text-to-speech/voice-options で各 voice をプレビュー可能
+
+#### 3. 料金目安 (2026 年 5 月時点)
+
+| モデル | 1M 文字あたり |
+|---|---|
+| `tts-1` (パック既定) | **$15** |
+| `tts-1-hd` (高品質) | $30 |
+| `gpt-4o-mini-tts` (新世代) | $12 |
+
+100 文字の発話 1 回 ≈ $0.0015 = 約 0.2 円。1,000 発話/月でも $1.5 程度。
+
+最新は [OpenAI Pricing](https://openai.com/api/pricing/) を参照。
+
+### ElevenLabs のセットアップ
+
+#### 1. アカウント作成 + API key 取得
+
+1. https://elevenlabs.io にアクセス → 右上「**Sign Up**」 → メール認証
+2. 右上のプロフィールアイコン → **My Account** → 左サイドバー **API Keys**
+   (直接アクセスなら https://elevenlabs.io/app/settings/api-keys )
+3. **Create API Key** → name 入力 → Permissions は **All access** で OK
+4. 表示された `sk_...` 形式の key を **その場でコピー** (再表示は不可、なくしたら作り直し)
+
+#### 2. ボイスクローン作成 (Voice ID 取得)
+
+1. 左サイドバー **Voice Lab** → **Add Voice** → **Instant Voice Cloning**
+2. ペルソナの参照音声 wav を upload (推奨: 1〜5 分のクリーンな日本語肉声、3〜5 分がベスト)
+3. ボイス名と説明を入力 → **Add Voice** で作成
+4. 作成されたボイスをクリック → **Voice ID** をコピー (例: `21m00Tcm4TlvDq8ikWAM`)
+
+> **Note**: Free プランでも IVC 3 枠まで使えるので、課金前に 1 ペルソナで試して声の質を確認できます。
+
+#### 3. SAIVerse に登録
+
+1. アドオン管理 → Voice TTS → デフォルトの「**ElevenLabs API Key**」(アコーディオン) に貼り付け
+   - 環境変数 `ELEVENLABS_API_KEY` を `.env` に書いてもOK
+2. ペルソナ別設定 → 「**TTS エンジン**」を `elevenlabs` に変更
+3. 「**ElevenLabs Voice ID**」に取得した voice_id を貼り付け
+
+#### 4. 料金目安 (2026 年 5 月時点、最新は [ElevenLabs Pricing](https://elevenlabs.io/pricing) を参照)
+
+| プラン | 月額 | クレジット/月 | カスタムボイス枠 | 商用 |
+|---|---|---|---|---|
+| **Free** | $0 | 10,000 | 3 (IVC) | 不可 |
+| **Starter** | $5 | 30,000 | 10 (IVC) | 可 |
+| **Creator** | $22 | 100,000 | 30 (IVC + PVC) | 可 |
+| **Pro** | $99 | 500,000 | 160 | 可 |
+
+クレジット消費レート (パック既定 `eleven_turbo_v2_5` の場合):
+
+| プラン | 月の合成可能文字数 (turbo) | 100 文字発話に換算 |
+|---|---|---|
+| Free | 約 20,000 文字 | 約 200 発話 |
+| Starter | 約 60,000 文字 | 約 600 発話 |
+| Creator | 約 200,000 文字 | 約 2,000 発話 |
+
+> モデル別 credit レート: `eleven_turbo_v2_5` (既定) と `eleven_flash_v2_5` は **0.5 credit/char**、`eleven_multilingual_v2` は **1 credit/char**。
+> 月初リセット、未使用分は失効。
+
+### 既存ペルソナのエンジン切替
+
+既に GPT-SoVITS / Irodori で運用しているペルソナをクラウド系に切り替える場合、**ペルソナごとに「TTS エンジン」を変えれば OK**。一部だけ openai_tts、他は GPT-SoVITS、というハイブリッドも可能 (`registry.json` も併用可)。
+
+### よくある問題
+
+- **「最初の一文節だけ再生されて止まる」**: 内部の PCM byte alignment バグ修正済み。古いバージョンを使っている場合は最新へ pull
+- **`API key not configured`**: addon UI のデフォルトセクション (アコーディオン展開) に貼り付ける場所を確認。ペルソナ別設定ではなくグローバル側
+- **HTTP 401**: key の typo / 期限切れ / 課金未設定 (OpenAI は最低 $5 入金しないと API 動かない)
+- **HTTP 429**: レートリミット。1 回はリトライされるが続けば backoff、しばらく待つ
+- **ElevenLabs HTTP 422**: voice_id がアカウントに存在しない、または別アカウントで作った Voice ID を貼っている
+
 ## 詳細セットアップ(手動)
 
 `setup.bat` が動かない場合や、中身を理解したい場合の手順。

@@ -100,6 +100,19 @@ setup.bat irodori
 
 より詳しいセットアップ手順(`setup.bat irodori` の内部動作、ログ観点等)は [SETUP.md](SETUP.md#irodori-tts-を使う場合) を、エンジン別パラメータの一覧は [voice_profiles/README.md](voice_profiles/README.md) を、内部設計は [ARCHITECTURE.md](ARCHITECTURE.md) を参照してください。
 
+## クラウド TTS エンジン (OpenAI / ElevenLabs)
+
+GPU を持たないユーザー向けに、API 経由の TTS エンジンを 2 種類用意しています。**追加のソフトウェアインストール不要、API key を入れるだけ**で使えます。アドオン管理 UI でペルソナ別に切替可能。
+
+| エンジン | 特徴 | コスト感 (100 文字 1 回) |
+|---|---|---|
+| **OpenAI TTS** | preset 9 voices、ボイスクローン無し、設定が最小 | 約 $0.0015 (≈ 0.2 円、`tts-1`) |
+| **ElevenLabs** | ボイスクローン対応 (Instant Voice Cloning)、品質最上位 | 月額制 ($5〜)、 100 文字 = 50 credit |
+
+詳細な API key 取得手順、料金プラン、Voice ID の作り方、トラブルシューティングは [SETUP.md の「クラウド TTS エンジン」](SETUP.md#クラウド-tts-エンジン-openai--elevenlabs-を使う場合) を参照してください。
+
+> 読み方辞書 (pronunciation_dict)、「音声を再生成」⟲ ボタンはどちらのエンジンでも引き続き動作します (engine 非依存)。
+
 ## 動作要件
 
 | 項目 | 最小 | 推奨 |
@@ -129,16 +142,19 @@ setup.bat irodori
 |---|---|---|---|---|---|---|
 | **GPT-SoVITS**(既定) | 数十秒(モデルロード含む) | 約 0.5〜1 秒 | ◎ | 1.3〜1.5x | 約 4GB | ネイティブ対応(上流 `streaming_mode`) |
 | **Irodori-TTS** | 約 12 秒(モデルロード含む) | 約 1.4 秒 | ○ | 0.3〜0.35x | 約 2GB | 疑似ストリーミング(文単位チャンキング) |
+| **OpenAI TTS** (クラウド) | 約 0.5〜1 秒 (API 接続) | 約 0.5〜1 秒 | ○ | 0.3x 程度 (API 側) | 0 (API のみ) | ネイティブ対応 (HTTP chunked) |
+| **ElevenLabs** (クラウド) | 約 0.5〜1 秒 (API 接続) | 約 0.5〜1 秒 | ◎ (クローン可) | 0.3x 程度 (API 側) | 0 (API のみ) | ネイティブ対応 (HTTP chunked) |
 
 > RTF = 合成時間 ÷ 出力音声長。小さいほど高速。Irodori の RTF 0.3x は「音声長の約 3 分の 1 の時間で合成が完了する」= リアルタイム再生に十分追いつく速度。
 
 ### 使い分けガイド
 
-- **最初は GPT-SoVITS でよい**(既定・推奨)。日本語実績が多く、ネイティブストリーミングで話し始めが最速
-- **ペルソナごとに別の声質傾向を試したい**: そのペルソナだけ Irodori に切替
-- **長文(30 秒以上)の読み上げを頻繁に行う**: どちらも適切にストリーミングするが、Irodori は固定コストが大きい分長文で RTF が有利
+- **GPU あり / 完全ローカル運用**: GPT-SoVITS が既定・推奨。日本語実績が多く、ネイティブストリーミングで話し始めが最速。ペルソナごとに別の声質傾向を試したいなら Irodori-TTS に切替
+- **GPU 無し / 手軽に試したい**: OpenAI TTS。API key だけで preset 9 voices から選べる。ボイスクローンは無いが安価で安定
+- **GPU 無し + ボイスクローンしたい**: ElevenLabs。ダッシュボードで Instant Voice Cloning して voice_id を取得 → addon UI に貼り付け。品質高いが課金
+- **長文(30 秒以上)の読み上げを頻繁に行う**: いずれもストリーミング対応だが、Irodori は固定コストが大きい分長文で RTF が有利。API 系は文字数課金なので長文連発は注意
 
-`setup.bat` はデフォルトで GPT-SoVITS を導入します。Irodori を追加する場合は [Irodori-TTS を使う](#irodori-tts-を使う) を参照。
+`setup.bat` はデフォルトで GPT-SoVITS を導入します。Irodori 追加は [Irodori-TTS を使う](#irodori-tts-を使う) を、クラウドエンジン (OpenAI / ElevenLabs) のセットアップは [クラウド TTS エンジン (OpenAI / ElevenLabs)](#クラウド-tts-エンジン-openai--elevenlabs) を参照。
 
 ## ファイル構成
 

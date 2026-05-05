@@ -1,8 +1,8 @@
 {
     "name": "saiverse-voice-tts",
     "display_name": "Voice TTS",
-    "description": "GPT-SoVITS / Irodori-TTS によるペルソナ発話のゼロショット音声クローン合成と再生。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
-    "version": "0.4.0",
+    "description": "GPT-SoVITS / Irodori-TTS / OpenAI TTS / ElevenLabs によるペルソナ発話の音声合成と再生。GPU が無い環境でもクラウド API 経由で利用可能。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
+    "version": "0.5.0",
     "params_schema": [
         {
             "key": "auto_speak",
@@ -15,16 +15,33 @@
         {
             "key": "engine",
             "label": "TTS エンジン",
-            "description": "このペルソナで使用する音声合成エンジン。gpt_sovits は高速ストリーミングと高品質で既定。irodori は別の声質傾向を試したいとき (疑似ストリーミング対応、RTF ~0.3x、NVIDIA GPU 必須)。未選択時は gpt_sovits。",
+            "description": "ペルソナの音声合成エンジン。gpt_sovits / irodori は GPU 必須のローカル合成 (参照音声を使う)。openai_tts / elevenlabs はクラウド API で GPU 不要 (それぞれ OpenAI 音声 / ElevenLabs Voice ID を指定)。未選択時は gpt_sovits。",
             "type": "dropdown",
             "default": "gpt_sovits",
-            "options": ["gpt_sovits", "irodori"],
+            "options": ["gpt_sovits", "irodori", "openai_tts", "elevenlabs"],
+            "persona_configurable": true
+        },
+        {
+            "key": "openai_voice",
+            "label": "OpenAI 音声",
+            "description": "OpenAI TTS で使うプリセット音声。エンジンが openai_tts のときのみ使用される。",
+            "type": "dropdown",
+            "default": "alloy",
+            "options": ["alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"],
+            "persona_configurable": true
+        },
+        {
+            "key": "elevenlabs_voice_id",
+            "label": "ElevenLabs Voice ID",
+            "description": "ElevenLabs ダッシュボード (Voice Lab → Instant Voice Cloning) で作成したボイスの ID を貼り付け。エンジンが elevenlabs のときのみ使用される。",
+            "type": "text",
+            "placeholder": "例: 21m00Tcm4TlvDq8ikWAM",
             "persona_configurable": true
         },
         {
             "key": "ref_audio",
             "label": "参照音声",
-            "description": "このペルソナの声を再現するための参照音声（3秒以上10秒以内、必須）。gpt_sovits / irodori 共通で同じ wav を使用可能。",
+            "description": "ペルソナの声を再現するための参照音声 (3〜10 秒、必須)。エンジンが gpt_sovits / irodori のときのみ使用される。両エンジンで同じ wav を使い回し可能。",
             "type": "file",
             "accept": "audio/wav,audio/mpeg,audio/flac,audio/ogg",
             "max_size_mb": 50,
@@ -34,7 +51,7 @@
         {
             "key": "ref_text",
             "label": "参照音声の書き起こし",
-            "description": "参照音声で話されている内容を正確に書き起こしたテキスト（句読点含め正確に）。gpt_sovits のみ使用、irodori では参照音声のみから話者特徴を推定するため無視されます。",
+            "description": "参照音声の内容を正確に書き起こしたテキスト (句読点含めて聞こえた通りに)。エンジンが gpt_sovits のときのみ使用される (irodori は参照音声のみから話者特徴を推定するため無視される)。",
             "type": "text",
             "placeholder": "例: 彼女はモーツァルトやベートーヴェンといった、古典派の作曲家が好きだ。",
             "persona_configurable": true
@@ -74,6 +91,26 @@
             "description": "TTS エンジンが固有名詞などを誤読する場合、合成直前に文字列置換で読みを補正します。例: キー「まはー」/ 値「マハー」と書くと、本文の『まはー』が『マハー』に置換されてから音声合成されます。チャット表示や記憶には影響しません。voice_profiles/pronunciation_dict.json (ファイル辞書) と統合され、同一キーの場合は本UIの値が優先されます。特定ペルソナだけ別の読み方を持たせたい場合は registry.json の per-persona pronunciation_dict を併用してください。",
             "type": "dict",
             "default": {},
+            "persona_configurable": false,
+            "collapsible": true,
+            "default_collapsed": true
+        },
+        {
+            "key": "openai_api_key",
+            "label": "OpenAI API Key",
+            "description": "OpenAI TTS で使う API key。空欄なら環境変数 OPENAI_API_KEY にフォールバック。https://platform.openai.com/api-keys",
+            "type": "password",
+            "default": "",
+            "persona_configurable": false,
+            "collapsible": true,
+            "default_collapsed": true
+        },
+        {
+            "key": "elevenlabs_api_key",
+            "label": "ElevenLabs API Key",
+            "description": "ElevenLabs で使う API key。空欄なら環境変数 ELEVENLABS_API_KEY にフォールバック。https://elevenlabs.io/app/settings/api-keys",
+            "type": "password",
+            "default": "",
             "persona_configurable": false,
             "collapsible": true,
             "default_collapsed": true
