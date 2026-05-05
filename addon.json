@@ -101,7 +101,7 @@
                 "label": "音声を再生成",
                 "tool": "regenerate",
                 "metadata_key": "audio_path",
-                "show_when": "metadata_exists"
+                "show_when": "always"
             }
         ],
         "client_actions": [
