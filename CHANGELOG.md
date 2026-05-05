@@ -16,6 +16,87 @@
     `regenerate_audio` は常に visible とする。`play_audio` は引き続き
     `metadata_exists` (鳴らす音声が無いと意味が無いため)。
 
+### v0.5.0: クラウド TTS エンジン (OpenAI TTS / ElevenLabs) に対応 (experiment/openai-elevenlabs-engines)
+
+GPU を持たないユーザー向けに、API 経由で TTS を行う 2 エンジンを追加。
+既存の GPT-SoVITS / Irodori-TTS と同じ抽象 (TTSEngine ABC) で並列に切替
+可能。
+
+#### 新規エンジン
+
+**openai_tts** (`tools/speak/engine/openai_tts.py`)
+- POST `https://api.openai.com/v1/audio/speech` を呼ぶ。
+- ボイスクローンは無し、preset 9 voices から選択
+  (alloy / echo / fable / onyx / nova / shimmer / ash / sage / coral)。
+  ペルソナごとに addon UI のドロップダウンで指定。
+- `response_format=pcm` (16-bit signed @ 24kHz raw PCM) を使用しデコード
+  不要・即時 numpy 化。50 ms ぶんバッファして SynthesisChunk に変換。
+- ストリーミング対応 (HTTP chunked)。
+- `model`: `tts-1` (既定) / `tts-1-hd` / `gpt-4o-mini-tts`。
+- `gpt-4o-mini-tts` のとき `instructions` でスタイル指示文を渡せる。
+- ref_audio は無視 (preset voices なので不要)。
+
+**elevenlabs** (`tools/speak/engine/elevenlabs.py`)
+- POST `/v1/text-to-speech/{voice_id}/stream` を呼ぶ。
+- ゼロショットボイスクローンを使えるが、v1 では voice_id をユーザーが
+  ElevenLabs ダッシュボード (Voice Lab → Instant Voice Cloning) で
+  作成 → addon UI に貼り付ける運用。自動クローンは v2 で検討。
+- `output_format=pcm_24000` で受け取り numpy 化。
+- ストリーミング対応。
+- `model_id`: `eleven_turbo_v2_5` (既定) / `eleven_multilingual_v2` 等。
+- `voice_settings`: stability / similarity_boost / style / use_speaker_boost
+  をペルソナ別 params で調整可能 (範囲外値は既定値にフォールバック)。
+
+#### API key 解決順位
+
+1. addon UI param (`openai_api_key` / `elevenlabs_api_key`) — 最優先、UI 編集が即反映
+2. `config/default.json` の `engines.<name>.api_key` (legacy フォールバック)
+3. 環境変数 (`OPENAI_API_KEY` / `ELEVENLABS_API_KEY`)
+
+OpenAI は本体既存の `OPENAI_API_KEY` 設定をそのまま流用できる。
+
+#### エラー処理
+
+- API key 未設定 / voice_id 未設定 → 即 `RuntimeError`
+- 4xx (auth / 不正リクエスト 等) → 1 回でログ出力 + 例外
+- 429 / 5xx → 1 回だけ短い backoff (1.5s) でリトライ
+- ネットワークエラー → 1 回リトライ後に例外
+
+#### addon.json 拡張
+
+- `engine` ドロップダウンに `openai_tts` / `elevenlabs` を追加
+- ペルソナ別: `openai_voice` (dropdown), `elevenlabs_voice_id` (text)
+- グローバル: `openai_api_key` (password), `elevenlabs_api_key` (password)
+  両方ともアコーディオンで折り畳み既定
+
+#### profiles.py 改修
+
+- `_API_ENGINES = {"openai_tts", "elevenlabs"}` を導入
+- ローカルエンジンは ref_audio 必須 (従来通り)、API エンジンは ref_audio
+  不要でプロファイル成立とする (registry.json fallback に飛ばずに済む)
+- `_EXCLUDED_KEYS` に `openai_api_key` / `elevenlabs_api_key` を追加
+  (engine が addon_config から fresh に解決するので params 経由不要)
+
+#### 依存追加
+
+なし。`httpx` は本体 requirements に既存。`openai` SDK は使わず REST 直叩き。
+
+#### テスト
+
+- `tests/test_engine_openai_tts.py` (16 件): リクエスト body / API key
+  解決順位 / ストリーミング集約 / 4xx 即例外 / 5xx リトライ
+- `tests/test_engine_elevenlabs.py` (20 件): 同様 + voice_settings 範囲
+  バリデーション / output_format フォールバック / voice_id 未設定例外
+
+#### 既知の制限
+
+- ElevenLabs の自動クローン (`ref_audio` を upload して voice_id を自動
+  生成) は v2 で対応予定。
+- pronunciation_dict は OpenAI / ElevenLabs どちらにも適用される (合成
+  直前の文字列置換なので engine 非依存)。
+- バブル「音声を再生成」ボタンも問題なく動作 (engine が変わっても
+  metadata 更新フローは共通)。
+
 ### v0.4.0: server_hooks 経由の TTS 発火に移行 (feature/voice-tts-speak-hook)
 
 SAIVerse 本体の認知モデル Phase C-2/3 (2026-05-01) で発話経路が Track ベースに
