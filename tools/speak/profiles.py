@@ -79,7 +79,7 @@ def _resolve_ref_audio(ref_audio: Optional[str]) -> Optional[str]:
     return str(resolved)
 
 
-_API_ENGINES = {"openai_tts", "elevenlabs"}
+_API_ENGINES = {"openai_tts", "elevenlabs", "azure_tts"}
 
 
 def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -120,6 +120,7 @@ def _try_addon_persona_config(persona_id: Optional[str]) -> Optional[Dict[str, A
             "auto_speak", "server_side_playback", "client_side_playback",
             "streaming", "output_device", "pronunciation_dict",
             "openai_api_key", "elevenlabs_api_key",
+            "azure_subscription_key", "azure_region",
         }
         return {
             "engine": engine,

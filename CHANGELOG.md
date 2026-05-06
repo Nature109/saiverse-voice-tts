@@ -4,6 +4,92 @@
 
 ## [Unreleased]
 
+### v0.6.0: Azure AI Speech (Personal Voice 含む) エンジンを追加 (experiment/azure-personal-voice)
+
+漢字読みが特に強いクラウド TTS として **Azure AI Speech** を 4 番目の
+クラウドエンジンとして追加。Microsoft の Neural TTS は Open JTalk
+ベースの韻律 + 自社モデルで日本語固有名詞の読み精度が高く、ElevenLabs
+で課題だった漢字読みを根本解決できる。Personal Voice (3 秒の参照音声
+からゼロショット相当のクローンを生成する Microsoft 機能) もサポート。
+
+#### 新規エンジン
+
+**azure_tts** (`tools/speak/engine/azure_tts.py`)
+- POST `https://{region}.tts.speech.microsoft.com/cognitiveservices/v1`
+- 認証: `Ocp-Apim-Subscription-Key` ヘッダ + `region` (例: japaneast)
+- Body: SSML (`application/ssml+xml`)
+- Output: `raw-24khz-16bit-mono-pcm` でストリーミング (HTTP chunked)
+- 既存 OpenAI / ElevenLabs エンジンと同じ PCM 集約 + 2 byte 境界
+  cache-bust + 50 ms バッファリング戦略
+
+#### 動作モード
+
+1. **Preset Neural Voice** (Personal Voice ID 未設定時)
+   - `azure_voice` で voice 名指定 (例: `ja-JP-NanamiNeural`)
+   - Microsoft の通常の Neural TTS、誰でもすぐ使える
+   - 漢字読み精度が高い
+2. **Personal Voice** (`azure_personal_voice_id` を設定したとき)
+   - SSML に `<mstts:ttsembedding speakerProfileId="...">` を埋め込み
+   - ベース voice は自動で `DragonLatestNeural` に切替
+   - Azure 側で事前に Speaker Profile を作成 + Voice Talent Consent が必要
+
+#### Style サポート
+
+`azure_voice_style` (例: `cheerful` / `sad` / `calm` / `whispering` 等)
+を指定すると SSML の `<mstts:express-as style="...">` で包んで送信。
+voice によって対応 style が異なる (公式ドキュメント参照)。
+
+#### API key 解決順位
+
+1. addon UI param (`azure_subscription_key` / `azure_region`)
+2. `config/default.json` の `engines.azure_tts.api_key` / `region`
+3. 環境変数 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION`
+4. region 既定値: `japaneast`
+
+#### addon.json 拡張
+
+- `engine` ドロップダウンに `azure_tts` を追加
+- ペルソナ別:
+  - `azure_voice` (text、既定 `ja-JP-NanamiNeural`)
+  - `azure_personal_voice_id` (text、空欄時は preset モード)
+  - `azure_voice_style` (text、SSML express-as style)
+- グローバル:
+  - `azure_subscription_key` (password、アコーディオン)
+  - `azure_region` (text、既定 `japaneast`、アコーディオン)
+
+#### profiles.py 改修
+
+- `_API_ENGINES` に `azure_tts` を追加 (ref_audio 不要なエンジンとして扱う)
+- `_EXCLUDED_KEYS` に `azure_subscription_key` / `azure_region` を追加
+  (engine が addon_config から fresh に解決するので params 経由不要)
+
+#### 依存追加
+
+なし。`httpx` は既存。Azure Speech SDK は使わず REST 直叩き
+(依存最小、SDK バージョン揺れ無し)。
+
+#### テスト
+
+- `tests/test_engine_azure_tts.py` (25 件):
+  - SSML 構築 (preset / Personal Voice / style / XML エスケープ)
+  - API key + region 解決の優先順位
+  - voice / personal_voice_id / style の params 解決
+  - リクエスト URL に region が反映される
+  - 4xx 即例外 / 5xx リトライ
+  - 奇数バイト chunk 回帰
+
+#### 既知の制限・注意点
+
+- Personal Voice は Azure リソースで「**Speaker Recognition eyes-on**」
+  の申請が必要 (数日〜2 週間)。Voice Talent Consent (本人による同意
+  音声録音) も必須。
+- Personal Voice 対応リージョンは限定: West US 2 / West Europe /
+  Southeast Asia 等 (公式ドキュメント参照)。日本リージョン (japaneast)
+  は preset Neural TTS のみ。
+- 料金 (2026 年時点): Neural TTS $16/1M chars、Personal Voice 出力は
+  $0.05/分 + $24/1M chars 程度。
+- pronunciation_dict、「音声を再生成」ボタンはこちらでも動作。
+
 ### 再生成ボタンを常時押せるようにする
 
 - `addon.json`: `regenerate_audio` バブルボタンの `show_when` を

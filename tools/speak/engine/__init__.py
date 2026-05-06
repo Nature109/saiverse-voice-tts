@@ -20,6 +20,9 @@ def create_engine(name: str, engine_config: Dict[str, Any]) -> TTSEngine:
     if name == "elevenlabs":
         from .elevenlabs import ElevenLabsEngine
         return ElevenLabsEngine(engine_config)
+    if name == "azure_tts":
+        from .azure_tts import AzureTTSEngine
+        return AzureTTSEngine(engine_config)
     raise ValueError(f"Unknown TTS engine: {name}")
 
 

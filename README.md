@@ -100,18 +100,20 @@ setup.bat irodori
 
 より詳しいセットアップ手順(`setup.bat irodori` の内部動作、ログ観点等)は [SETUP.md](SETUP.md#irodori-tts-を使う場合) を、エンジン別パラメータの一覧は [voice_profiles/README.md](voice_profiles/README.md) を、内部設計は [ARCHITECTURE.md](ARCHITECTURE.md) を参照してください。
 
-## クラウド TTS エンジン (OpenAI / ElevenLabs)
+## クラウド TTS エンジン (OpenAI / ElevenLabs / Azure)
 
-GPU を持たないユーザー向けに、API 経由の TTS エンジンを 2 種類用意しています。**追加のソフトウェアインストール不要、API key を入れるだけ**で使えます。アドオン管理 UI でペルソナ別に切替可能。
+GPU を持たないユーザー向けに、API 経由の TTS エンジンを 3 種類用意しています。**追加のソフトウェアインストール不要、API key を入れるだけ**で使えます。アドオン管理 UI でペルソナ別に切替可能。
 
-| エンジン | 特徴 | コスト感 (100 文字 1 回) |
-|---|---|---|
-| **OpenAI TTS** | preset 9 voices、ボイスクローン無し、設定が最小 | 約 $0.0015 (≈ 0.2 円、`tts-1`) |
-| **ElevenLabs** | ボイスクローン対応 (Instant Voice Cloning)、品質最上位 | 月額制 ($5〜)、 100 文字 = 50 credit |
+| エンジン | 特徴 | 漢字読み | コスト感 (100 文字 1 回) |
+|---|---|---|---|
+| **OpenAI TTS** | preset 9 voices、ボイスクローン無し、設定が最小 | ○ | 約 $0.0015 (≈ 0.2 円、`tts-1`) |
+| **ElevenLabs** | ボイスクローン対応 (Instant Voice Cloning)、品質最上位 | △ (固有名詞弱め) | 月額制 ($5〜)、 100 文字 = 50 credit |
+| **Azure AI Speech** | preset Neural Voice + Personal Voice (クローン)、漢字最強 | ◎ | 約 $0.0016 (≈ 0.25 円、Neural)、Personal Voice は別料金 |
 
-詳細な API key 取得手順、料金プラン、Voice ID の作り方、トラブルシューティングは [SETUP.md の「クラウド TTS エンジン」](SETUP.md#クラウド-tts-エンジン-openai--elevenlabs-を使う場合) を参照してください。
+詳細な API key 取得手順、料金プラン、Voice ID / Personal Voice の作り方、トラブルシューティングは [SETUP.md の「クラウド TTS エンジン」](SETUP.md#クラウド-tts-エンジン-openai--elevenlabs--azure-を使う場合) を参照してください。
 
-> 読み方辞書 (pronunciation_dict)、「音声を再生成」⟲ ボタンはどちらのエンジンでも引き続き動作します (engine 非依存)。
+> 読み方辞書 (pronunciation_dict)、「音声を再生成」⟲ ボタンはどのエンジンでも引き続き動作します (engine 非依存)。
+> **漢字読みの精度が気になる場合は Azure AI Speech 推奨**。Microsoft の日本語 Neural TTS は Open JTalk ベースで固有名詞も含めて読み分け精度が高い。
 
 ## 動作要件
 

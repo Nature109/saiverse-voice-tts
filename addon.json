@@ -1,8 +1,8 @@
 {
     "name": "saiverse-voice-tts",
     "display_name": "Voice TTS",
-    "description": "GPT-SoVITS / Irodori-TTS / OpenAI TTS / ElevenLabs によるペルソナ発話の音声合成と再生。GPU が無い環境でもクラウド API 経由で利用可能。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
-    "version": "0.5.0",
+    "description": "GPT-SoVITS / Irodori-TTS / OpenAI TTS / ElevenLabs / Azure AI Speech (Personal Voice 含む) によるペルソナ発話の音声合成と再生。GPU が無い環境でもクラウド API 経由で利用可能。バックエンドPCのスピーカーとブラウザの両方に配信可能。",
+    "version": "0.6.0",
     "params_schema": [
         {
             "key": "auto_speak",
@@ -15,10 +15,10 @@
         {
             "key": "engine",
             "label": "TTS エンジン",
-            "description": "ペルソナの音声合成エンジン。gpt_sovits / irodori は GPU 必須のローカル合成 (参照音声を使う)。openai_tts / elevenlabs はクラウド API で GPU 不要 (それぞれ OpenAI 音声 / ElevenLabs Voice ID を指定)。未選択時は gpt_sovits。",
+            "description": "ペルソナの音声合成エンジン。gpt_sovits / irodori は GPU 必須のローカル合成 (参照音声を使う)。openai_tts / elevenlabs / azure_tts はクラウド API で GPU 不要。azure_tts は漢字読みが特に強く、Personal Voice 利用時はクローンも可能。未選択時は gpt_sovits。",
             "type": "dropdown",
             "default": "gpt_sovits",
-            "options": ["gpt_sovits", "irodori", "openai_tts", "elevenlabs"],
+            "options": ["gpt_sovits", "irodori", "openai_tts", "elevenlabs", "azure_tts"],
             "persona_configurable": true
         },
         {
@@ -36,6 +36,31 @@
             "description": "ElevenLabs ダッシュボード (Voice Lab → Instant Voice Cloning) で作成したボイスの ID を貼り付け。エンジンが elevenlabs のときのみ使用される。",
             "type": "text",
             "placeholder": "例: 21m00Tcm4TlvDq8ikWAM",
+            "persona_configurable": true
+        },
+        {
+            "key": "azure_voice",
+            "label": "Azure 音声",
+            "description": "Azure Neural TTS の voice 名。日本語 preset の例: ja-JP-NanamiNeural / ja-JP-KeitaNeural / ja-JP-AoiNeural / ja-JP-DaichiNeural / ja-JP-ShioriNeural。Personal Voice 利用時は azure_personal_voice_id 側を埋めれば自動で base voice (DragonLatestNeural) に切替。エンジンが azure_tts のときのみ使用される。",
+            "type": "text",
+            "default": "ja-JP-NanamiNeural",
+            "placeholder": "例: ja-JP-NanamiNeural",
+            "persona_configurable": true
+        },
+        {
+            "key": "azure_personal_voice_id",
+            "label": "Azure Personal Voice ID",
+            "description": "Azure Speech リソースで作成した Personal Voice の speakerProfileId。設定すると azure_voice より優先され、ベース voice は DragonLatestNeural に自動切替。空欄なら azure_voice の preset で合成 (= 通常の Neural TTS)。エンジンが azure_tts のときのみ使用される。",
+            "type": "text",
+            "placeholder": "例: 12345678-abcd-1234-efgh-1234567890ab",
+            "persona_configurable": true
+        },
+        {
+            "key": "azure_voice_style",
+            "label": "Azure 音声スタイル",
+            "description": "Azure SSML の <mstts:express-as style=...> に対応するスタイル指定。例: cheerful / sad / angry / calm / chat / friendly / hopeful / shouting / whispering / terrified / unfriendly 等 (voice によって対応する style が異なる)。空欄ならスタイル指定なし。",
+            "type": "text",
+            "placeholder": "例: cheerful",
             "persona_configurable": true
         },
         {
@@ -111,6 +136,27 @@
             "description": "ElevenLabs で使う API key。空欄なら環境変数 ELEVENLABS_API_KEY にフォールバック。https://elevenlabs.io/app/settings/api-keys",
             "type": "password",
             "default": "",
+            "persona_configurable": false,
+            "collapsible": true,
+            "default_collapsed": true
+        },
+        {
+            "key": "azure_subscription_key",
+            "label": "Azure Speech Subscription Key",
+            "description": "Azure AI Speech リソースの subscription key。空欄なら環境変数 AZURE_SPEECH_KEY にフォールバック。Azure Portal の Speech リソース → 「キーとエンドポイント」から取得。",
+            "type": "password",
+            "default": "",
+            "persona_configurable": false,
+            "collapsible": true,
+            "default_collapsed": true
+        },
+        {
+            "key": "azure_region",
+            "label": "Azure リージョン",
+            "description": "Azure Speech リソースのリージョン。例: japaneast / japanwest / eastus / westus2 / southeastasia。空欄なら環境変数 AZURE_SPEECH_REGION → japaneast にフォールバック。Personal Voice 対応リージョンは公式ドキュメント参照。",
+            "type": "text",
+            "default": "japaneast",
+            "placeholder": "例: japaneast",
             "persona_configurable": false,
             "collapsible": true,
             "default_collapsed": true
