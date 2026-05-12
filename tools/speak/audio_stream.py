@@ -85,12 +85,39 @@ def _make_encoder(sample_rate: int) -> Optional[Any]:
 
 
 def open_stream(message_id: str, sample_rate: int) -> None:
-    """Allocate a new broadcast stream for ``message_id``."""
+    """Allocate a new broadcast stream for ``message_id``.
+
+    If a placeholder context already exists (created by an early
+    ``subscribe()`` call before this ``open_stream()`` arrived), reuse it:
+    fill in the encoder/sample_rate and preserve any consumers that
+    subscribed before this point. Otherwise allocate a fresh context as
+    before.
+
+    Reuse only applies to not-yet-closed contexts. A closed stream context
+    is replaced (the message_id can be re-opened from scratch).
+
+    This subscribe-before-open support lets late publishers (e.g. TTS
+    synthesis that hasn't started yet) be matched deterministically with
+    early subscribers, removing the need for callers to poll.
+    """
     if not message_id:
         return
     encoder = _make_encoder(sample_rate)
-    ctx = _StreamContext(encoder=encoder, sample_rate=sample_rate)
     with _STREAMS_LOCK:
+        existing = _STREAMS.get(str(message_id))
+        if existing is not None and not existing.closed:
+            # Reuse placeholder created by subscribe-before-open: fill in
+            # encoder/sample_rate while preserving pre-registered consumers
+            # and frames (frames should be empty at this point).
+            existing.encoder = encoder
+            existing.sample_rate = sample_rate
+            LOGGER.debug(
+                "audio_stream open (reuse placeholder): message_id=%s sr=%d "
+                "consumers=%d",
+                message_id, sample_rate, len(existing.consumers),
+            )
+            return
+        ctx = _StreamContext(encoder=encoder, sample_rate=sample_rate)
         _STREAMS[str(message_id)] = ctx
     LOGGER.debug(
         "audio_stream open: message_id=%s sr=%d encoder=%s",
@@ -164,9 +191,18 @@ def close_stream(message_id: str) -> None:
 def subscribe(message_id: str) -> "Optional[Queue[Optional[bytes]]]":
     """Subscribe a new consumer. Returns a queue seeded with all frames so far.
 
-    If the stream is unknown (never opened) returns None.
-    If the stream is already closed, returns a queue pre-populated with all
-    frames + a sentinel, so the consumer can drain completed audio cleanly.
+    If ``message_id`` is empty (validation failure) returns None.
+
+    If the stream is not yet opened (subscribe-before-open case), creates
+    an empty placeholder context so that a later ``open_stream()`` call
+    can pick it up while preserving this consumer's queue. This allows
+    late publishers (e.g. TTS synthesis that hasn't started yet) to be
+    matched deterministically with early subscribers, removing the need
+    for callers to poll for stream readiness.
+
+    If the stream is already closed, returns a queue pre-populated with
+    all frames + a sentinel, so the consumer can drain completed audio
+    cleanly.
     """
     if not message_id:
         return None
@@ -174,7 +210,16 @@ def subscribe(message_id: str) -> "Optional[Queue[Optional[bytes]]]":
     with _STREAMS_LOCK:
         ctx = _STREAMS.get(str(message_id))
         if ctx is None:
-            return None
+            # subscribe-before-open: create empty placeholder context so the
+            # consumer queue is registered and ready when open_stream()
+            # arrives. encoder/sample_rate will be filled by open_stream().
+            ctx = _StreamContext(encoder=None, sample_rate=0)
+            _STREAMS[str(message_id)] = ctx
+            LOGGER.debug(
+                "audio_stream subscribe (before-open): message_id=%s "
+                "(placeholder ctx created)",
+                message_id,
+            )
         # Replay already-emitted frames
         for frame in ctx.frames:
             q.put(frame)
