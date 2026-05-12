@@ -401,6 +401,11 @@ class _TTSWorker:
                         stream.start()
                     if message_id:
                         audio_stream.open_stream(message_id, sample_rate)
+                        # PCM 経路も並行で open (Stack-chan 等の物理 vessel が
+                        # MP3 decode を省いて直接 playRaw に流すための経路)
+                        audio_stream.open_pcm_stream(
+                            message_id, sample_rate, channels=1,
+                        )
                         http_opened = True
                         # ストリーム開始直後に audio_ready を発火する。Route Handler
                         # 側で /stream エンドポイントは arrayBuffer バッファ展開を
@@ -415,14 +420,16 @@ class _TTSWorker:
                 if stream is not None:
                     stream.write(audio_np.astype(np.float32, copy=False))
                 if http_opened:
-                    audio_stream.push_chunk(
-                        message_id, self._to_int16_bytes(audio_np),
-                    )
+                    pcm_bytes = self._to_int16_bytes(audio_np)
+                    audio_stream.push_chunk(message_id, pcm_bytes)
+                    # PCM 経路にも同じ bytes を broadcast
+                    audio_stream.push_pcm_chunk(message_id, pcm_bytes)
                 collected.append(audio_np)
         except Exception as exc:
             LOGGER.error("Streaming synthesis/playback failed: %s", exc)
             if http_opened:
                 audio_stream.close_stream(message_id)
+                audio_stream.close_pcm_stream(message_id)
             return False
         finally:
             if stream is not None:
@@ -434,6 +441,7 @@ class _TTSWorker:
 
         if http_opened:
             audio_stream.close_stream(message_id)
+            audio_stream.close_pcm_stream(message_id)
 
         if not collected or sample_rate is None:
             LOGGER.warning("Streaming produced no audio for job %s", job_id)

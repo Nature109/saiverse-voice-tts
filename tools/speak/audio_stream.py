@@ -60,6 +60,24 @@ _STREAMS: Dict[str, _StreamContext] = {}
 # arrive.
 _SENTINEL: Optional[bytes] = None
 
+
+@dataclass
+class _PcmStreamContext:
+    """PCM 経路用の per-stream state. MP3 経路 (_StreamContext) と独立。
+
+    encoder は持たず、PCM bytes を生のまま frames に蓄積 + consumers に broadcast。
+    物理 vessel (Stack-chan 等) が MP3 decode を省略して playRaw に直結できるよう、
+    voice-tts が PCM を圧縮なしで配信する用途。
+    """
+    sample_rate: int
+    channels: int = 1
+    frames: List[bytes] = field(default_factory=list)
+    consumers: List["Queue[Optional[bytes]]"] = field(default_factory=list)
+    closed: bool = False
+
+
+_PCM_STREAMS: Dict[str, _PcmStreamContext] = {}
+
 # MP3 encoding parameters. 128 kbps mono is a good quality/bandwidth trade-off
 # for speech synthesis output.
 _MP3_BITRATE = 128
@@ -278,4 +296,133 @@ __all__ = [
     "has_stream",
     "discard_stream",
     "active_stream_count",
+    # PCM 経路 (物理 vessel 等、decoder を持たない consumer 向け)
+    "open_pcm_stream",
+    "push_pcm_chunk",
+    "close_pcm_stream",
+    "subscribe_pcm",
+    "get_pcm_stream_info",
+    "discard_pcm_stream",
 ]
+
+
+# ============================================================================
+# PCM 経路 (decoder を持たない consumer 向け、Stack-chan 等の物理 vessel 用)
+# ============================================================================
+# MP3 経路 (上の open_stream / push_chunk / ...) と完全に独立。
+# voice-tts は両方に並列で push する (playback_worker)。MP3 経路は HTTP/WS で
+# decoder ありの consumer 向け、PCM 経路は ESP32 等のシンプルな再生器向け。
+
+
+def open_pcm_stream(
+    message_id: str, sample_rate: int, channels: int = 1
+) -> None:
+    """Allocate a new broadcast stream for ``message_id`` (PCM)."""
+    if not message_id:
+        return
+    with _STREAMS_LOCK:
+        existing = _PCM_STREAMS.get(str(message_id))
+        if existing is not None and not existing.closed:
+            existing.sample_rate = sample_rate
+            existing.channels = channels
+            LOGGER.debug(
+                "audio_stream open_pcm (reuse placeholder): message_id=%s "
+                "sr=%d ch=%d consumers=%d",
+                message_id, sample_rate, channels, len(existing.consumers),
+            )
+            return
+        ctx = _PcmStreamContext(sample_rate=sample_rate, channels=channels)
+        _PCM_STREAMS[str(message_id)] = ctx
+    LOGGER.debug(
+        "audio_stream open_pcm: message_id=%s sr=%d ch=%d",
+        message_id, sample_rate, channels,
+    )
+
+
+def push_pcm_chunk(message_id: str, pcm_bytes: bytes) -> None:
+    """Broadcast PCM bytes to all subscribed consumers (PCM path).
+
+    ``pcm_bytes`` is raw signed 16-bit little-endian PCM. No header,
+    no metadata. The sample_rate / channels are conveyed via
+    ``open_pcm_stream`` / ``get_pcm_stream_info``.
+    """
+    if not message_id or not pcm_bytes:
+        return
+    with _STREAMS_LOCK:
+        ctx = _PCM_STREAMS.get(str(message_id))
+        if ctx is None:
+            return
+        ctx.frames.append(pcm_bytes)
+        consumers = list(ctx.consumers)
+    for q in consumers:
+        q.put(pcm_bytes)
+
+
+def close_pcm_stream(message_id: str) -> None:
+    """Mark PCM stream closed and signal all consumers."""
+    if not message_id:
+        return
+    with _STREAMS_LOCK:
+        ctx = _PCM_STREAMS.get(str(message_id))
+        if ctx is None:
+            return
+        ctx.closed = True
+        consumers = list(ctx.consumers)
+    for q in consumers:
+        q.put(_SENTINEL)
+    LOGGER.debug(
+        "audio_stream close_pcm: message_id=%s consumers=%d",
+        message_id, len(consumers),
+    )
+
+
+def subscribe_pcm(message_id: str) -> "Optional[Queue[Optional[bytes]]]":
+    """Subscribe a new consumer to the PCM broadcast.
+
+    Supports subscribe-before-open: if no open_pcm_stream has happened yet,
+    creates a placeholder context so this consumer's queue is registered.
+    A later open_pcm_stream will fill in sample_rate / channels while
+    preserving the queue.
+    """
+    if not message_id:
+        return None
+    q: "Queue[Optional[bytes]]" = Queue()
+    with _STREAMS_LOCK:
+        ctx = _PCM_STREAMS.get(str(message_id))
+        if ctx is None:
+            ctx = _PcmStreamContext(sample_rate=0, channels=0)
+            _PCM_STREAMS[str(message_id)] = ctx
+            LOGGER.debug(
+                "audio_stream subscribe_pcm (before-open): message_id=%s "
+                "(placeholder ctx created)",
+                message_id,
+            )
+        for frame in ctx.frames:
+            q.put(frame)
+        if ctx.closed:
+            q.put(_SENTINEL)
+        else:
+            ctx.consumers.append(q)
+    return q
+
+
+def get_pcm_stream_info(message_id: str):
+    """Return ``(sample_rate, channels)`` if the PCM stream is open with
+    valid metadata, else ``None``. Used by consumers that subscribed
+    before open and need to wait for the open_pcm_stream to fill metadata.
+    """
+    if not message_id:
+        return None
+    with _STREAMS_LOCK:
+        ctx = _PCM_STREAMS.get(str(message_id))
+        if ctx is None or ctx.sample_rate == 0:
+            return None
+        return (ctx.sample_rate, ctx.channels)
+
+
+def discard_pcm_stream(message_id: str) -> None:
+    """Remove the PCM stream context."""
+    if not message_id:
+        return
+    with _STREAMS_LOCK:
+        _PCM_STREAMS.pop(str(message_id), None)
