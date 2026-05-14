@@ -425,6 +425,54 @@ class _TTSWorker:
                     # PCM 経路にも同じ bytes を broadcast
                     audio_stream.push_pcm_chunk(message_id, pcm_bytes)
                 collected.append(audio_np)
+
+            # 全チャンク write 完了後、 sounddevice の ring buffer に残った
+            # 音声を最後まで再生し切るまで待つ。
+            #
+            # 背景: sounddevice の ``OutputStream.stop()`` の docstring は
+            # "waits until all pending audio buffers have been played
+            # before it returns" と謳っているが、 実環境 (Windows + 当該
+            # PortAudio バックエンド) では機能しないことが観測されている。
+            # 観測例 (SAIVerse log 20260515_002403):
+            #   - 1 ジョブ目: enqueue→audio_completed=22.91s、wav 長=83.2 秒
+            #     (= ``stream.write()`` も ``stream.stop()`` も realtime 待ち
+            #     せず、 残り ~60 秒分の音声は buffer に積まれたまま)
+            #   - 直後の 2 ジョブ目: 1 ジョブ目の audio_completed と同 秒に
+            #     synthesis 開始、 新 OutputStream を開く
+            #   - 結果: 1 ジョブ目の音声が途中 (= buffer 分しか) しか
+            #     再生されないまま 2 ジョブ目に切り替わる ("音声が途中で
+            #     切れる" としてユーザー観測)
+            #
+            # 対策: ``first_chunk_at`` (= 再生開始時刻) と合計音声長から
+            # 「本来 playback が終わるべき時刻」 を計算し、 経過時間が
+            # 足りなければその差分を ``time.sleep()`` で埋める。 これで
+            # ``stream.stop() + close()`` が走るタイミングまでに buffer は
+            # 自然 drain した状態になり、 close 時に discard される残音
+            # が無くなる。 +0.2 秒は OS audio device のレイテンシ吸収用
+            # マージン。
+            #
+            # sleep の根拠が「正確な playback 終了時刻の推定」 なので、
+            # `stream is None` (= server_side_playback=False) のときや
+            # 「1 chunk も来なかった」 ケースは何もしない。
+            if (
+                stream is not None
+                and sample_rate is not None
+                and first_chunk_at is not None
+                and collected
+            ):
+                total_audio_seconds = sum(
+                    len(a) / sample_rate for a in collected
+                )
+                target_finish_at = first_chunk_at + total_audio_seconds
+                remaining = target_finish_at - time.time()
+                if remaining > 0:
+                    LOGGER.debug(
+                        "TTS playback drain wait: %.2fs (audio=%.2fs, "
+                        "synth_elapsed=%.2fs, job=%s, msg=%s)",
+                        remaining, total_audio_seconds,
+                        time.time() - t_start, job_id, message_id,
+                    )
+                    time.sleep(remaining + 0.2)
         except Exception as exc:
             LOGGER.error("Streaming synthesis/playback failed: %s", exc)
             if http_opened:
