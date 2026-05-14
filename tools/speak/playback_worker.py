@@ -454,8 +454,10 @@ class _TTSWorker:
             # 対策: ``first_chunk_at`` + ``total_audio_seconds`` から
             # 「本来 playback が終わるべき時刻」 を計算し、 worker の
             # 経過時間がそれに達するまで ``time.sleep()`` で埋める。
-            # +0.2 秒は subscriber 側 (= ブラウザ / device) のバッファ
-            # 吸収マージン。
+            # +2.0 秒は subscriber 側のスタートアップ遅延 (= HTML5 audio
+            # の ``canplay`` 待ち、 ネットワーク微小遅延、 リングバッファ
+            # 吸収) のマージン。 当初 0.2 秒では足りず「最後の方が次に
+            # 切り替わる」 症状が残った観測 (= session 20260515_015816)。
             #
             # ``server_side_playback`` の真偽に依存しない (= sounddevice
             # 経由でも HTTP stream 経由でも、 subscriber 視点では realtime
@@ -496,7 +498,7 @@ class _TTSWorker:
                         remaining, total_audio_seconds,
                         time.time() - t_start, job_id, message_id,
                     )
-                    time.sleep(remaining + 0.2)
+                    time.sleep(remaining + 2.0)
         except Exception as exc:
             LOGGER.error("Streaming synthesis/playback failed: %s", exc)
             if http_opened:
