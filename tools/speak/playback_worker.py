@@ -32,6 +32,24 @@ _CONFIG_PATH = _PACK_ROOT / "config" / "default.json"
 _CONFIG_TEMPLATE_PATH = _PACK_ROOT / "config" / "default.json.template"
 _ADDON_NAME = "saiverse-voice-tts"
 
+# ----- Chunk push 流量制御 (= subscriber 側 buffer overflow 抑制) ---
+# 高水位 / 低水位パターン: 「subscriber に先行送信した秒数 (= lead)」 が
+# 高水位を超えたら、 低水位まで戻るよう sleep する。 GPU 推論が realtime より
+# 速いと chunk が無限に push されて subscriber 側 socket buffer 詰まり →
+# client write timeout 連鎖死、 という観測 (session 20260515_131732 の
+# stackchan_room:177 が 17.82s lead で死亡) への対策。
+#
+# 値の根拠: stack-chan (gateway → ESP32 forward + ESP32 内 buffer 含む) を
+# 想定した保守値。 観測死亡値 17s に対して半分以下の高水位 + 安全マージン
+# 込みの低水位。 web UI 等他の subscriber は通常もっと余裕があるので、
+# 統一値で問題ない (= 厳しい subscriber 基準で全環境統一)。
+_FLOW_LEAD_HIGH_SECONDS = 8.0
+_FLOW_LEAD_LOW_SECONDS = 3.0
+# subscriber が再生を開始するまでのラグ (= speak_hook の first chunk 待ち、
+# gateway → ESP32 forward の startup、 ブラウザ HTML5 audio canplay 等)。
+# 1 秒は推測値で、 実観測より小さく見積もる (= lead を大きめに出して安全側)。
+_FLOW_SUBSCRIBER_STARTUP_ALPHA = 1.0
+
 
 def _get_active_message_id() -> Optional[str]:
     try:
@@ -443,6 +461,36 @@ class _TTSWorker:
                         "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
                         first_chunk_at - t_start, job_id, message_id,
                     )
+                # ----- Flow control (高水位/低水位 + α 補正) -----
+                # 既に push 済 (= collected) の合計秒数と、 subscriber が再生
+                # できた推測秒数 (= elapsed - α) の差を 「lead」 として、 これが
+                # 高水位を超えたら低水位まで戻すよう sleep する。 GPU 推論が
+                # realtime より速いと chunk が無限に push されて subscriber 側
+                # buffer 詰まり → write timeout 連鎖死、 という観測 (session
+                # 20260515_131732 の stackchan_room:177 が 17.82s lead で死亡)
+                # への対策。 詳細は intent doc 参照。
+                #
+                # 初回 chunk (= collected 空) は first_chunk_at が今 set された
+                # ばかりで elapsed=0、 lead 計算が無意味なのでスキップ。
+                if collected and first_chunk_at is not None and sample_rate:
+                    total_sent_seconds = sum(
+                        len(a) / sample_rate for a in collected
+                    )
+                    elapsed = time.time() - first_chunk_at
+                    actual_played = elapsed - _FLOW_SUBSCRIBER_STARTUP_ALPHA
+                    lead_seconds = total_sent_seconds - actual_played
+                    if lead_seconds > _FLOW_LEAD_HIGH_SECONDS:
+                        sleep_seconds = lead_seconds - _FLOW_LEAD_LOW_SECONDS
+                        LOGGER.debug(
+                            "flow control: lead=%.2fs > %.1fs, "
+                            "sleep %.2fs to bring back to %.1fs "
+                            "(job=%s, msg=%s)",
+                            lead_seconds, _FLOW_LEAD_HIGH_SECONDS,
+                            sleep_seconds, _FLOW_LEAD_LOW_SECONDS,
+                            job_id, message_id,
+                        )
+                        time.sleep(sleep_seconds)
+
                 if stream is not None:
                     stream.write(audio_np.astype(np.float32, copy=False))
                 if http_opened:
