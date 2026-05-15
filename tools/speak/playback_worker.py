@@ -351,12 +351,6 @@ class _TTSWorker:
         server_side_playback: bool = True,
         output_device: Optional[int] = None,
     ) -> bool:
-        # ★DIAG: ファイルが loaded されてるか確認用 (= 確認後撤去)
-        LOGGER.debug(
-            "drain-diag: _play_streaming entered job=%s msg=%s "
-            "server_side_playback=%s",
-            job_id, message_id, server_side_playback,
-        )
         """Synthesize and play chunk-by-chunk while saving the full wav.
 
         If ``message_id`` is provided, each chunk is also forwarded to the
@@ -431,74 +425,6 @@ class _TTSWorker:
                     # PCM 経路にも同じ bytes を broadcast
                     audio_stream.push_pcm_chunk(message_id, pcm_bytes)
                 collected.append(audio_np)
-
-            # 全チャンク synthesis 完了後、 1 ジョブ あたりの処理時間が
-            # 音声の長さと一致するよう実時間まで sleep する。
-            #
-            # 背景: ``playback_worker`` は FIFO の単一スレッド。 ある
-            # ジョブの ``_process`` が return すると即座に次ジョブの
-            # synthesis が始まり、 ``audio_ready`` / ``audio_completed``
-            # イベントが連続発火する。 一方 subscriber 側 (= web UI の
-            # HTML5 audio / Stack-chan の gateway 等) は audio を realtime
-            # でしか再生できないため、 後発の audio_ready が前発の再生
-            # 完了より早く届くと **後発が前発を切り捨てる** 挙動になる
-            # (= ブラウザの autoplay が「新しい src 来た → 切替」 と判断
-            # するため)。
-            #
-            # 観測例:
-            #   - 20260515_011917 セッション:
-            #     msg 163 = 114 秒の音声、 _play_streaming 内 elapsed 約
-            #     32 秒で完了 → 次 ジョブ msg 164 が即座に開始 → ブラウザは
-            #     msg 163 を 32 秒分しか聞かないまま msg 164 に切替
-            #
-            # 対策: ``first_chunk_at`` + ``total_audio_seconds`` から
-            # 「本来 playback が終わるべき時刻」 を計算し、 worker の
-            # 経過時間がそれに達するまで ``time.sleep()`` で埋める。
-            # +2.0 秒は subscriber 側のスタートアップ遅延 (= HTML5 audio
-            # の ``canplay`` 待ち、 ネットワーク微小遅延、 リングバッファ
-            # 吸収) のマージン。 当初 0.2 秒では足りず「最後の方が次に
-            # 切り替わる」 症状が残った観測 (= session 20260515_015816)。
-            #
-            # ``server_side_playback`` の真偽に依存しない (= sounddevice
-            # 経由でも HTTP stream 経由でも、 subscriber 視点では realtime
-            # 再生が前提なので、 worker は等しく realtime ペースに足並み
-            # を揃える必要がある)。
-            #
-            # 「1 chunk も来なかった」 (= synthesizer が即終了) ケースは
-            # ``first_chunk_at is None`` で除外。
-            # ★DIAG: 「コードが実行されたか」 と 「if が真だったか」 を
-            # 切り分けるため if の外側にも 1 行 log を入れる。 確認後は撤去。
-            LOGGER.debug(
-                "drain-diag: reached end-of-for-loop "
-                "stream_ok=%s sample_rate=%s first_chunk_at=%s "
-                "collected_len=%d job=%s msg=%s",
-                stream is not None, sample_rate, first_chunk_at,
-                len(collected), job_id, message_id,
-            )
-            if (
-                sample_rate is not None
-                and first_chunk_at is not None
-                and collected
-            ):
-                total_audio_seconds = sum(
-                    len(a) / sample_rate for a in collected
-                )
-                target_finish_at = first_chunk_at + total_audio_seconds
-                remaining = target_finish_at - time.time()
-                LOGGER.debug(
-                    "drain-diag: total_audio=%.2fs target_finish_at=%.2f "
-                    "now=%.2f remaining=%.2f",
-                    total_audio_seconds, target_finish_at,
-                    time.time(), remaining,
-                )
-                if remaining > 0:
-                    LOGGER.debug(
-                        "TTS playback realtime gate: %.2fs (audio=%.2fs, "
-                        "synth_elapsed=%.2fs, job=%s, msg=%s)",
-                        remaining, total_audio_seconds,
-                        time.time() - t_start, job_id, message_id,
-                    )
-                    time.sleep(remaining + 2.0)
         except Exception as exc:
             LOGGER.error("Streaming synthesis/playback failed: %s", exc)
             if http_opened:
