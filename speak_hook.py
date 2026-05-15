@@ -67,10 +67,20 @@ def on_persona_speak(
     # queue 末尾積み or 旧再生 preempt を切り替えるのに使う。
     pulse_id = _kwargs.get("pulse_id")
 
+    # Pipeline Streaming (Phase 2-α): sea runtime が文区切りごとに sub-speak
+    # を発火する経路で、 同 message_id に複数 sub-text が連続 enqueue される。
+    # sub_seq / is_final が無ければ従来の 「1 message = 1 sub-text」 動作。
+    sub_seq = _kwargs.get("sub_seq")
+    is_final = _kwargs.get("is_final", True)
+
     job_id = enqueue_tts(
-        cleaned, persona_id, message_id=message_id, pulse_id=pulse_id,
+        cleaned, persona_id,
+        message_id=message_id, pulse_id=pulse_id,
+        sub_seq=sub_seq, is_final=is_final,
     )
     LOGGER.debug(
-        "voice-tts speak_hook enqueued: persona=%s msg=%s pulse=%s job=%s len=%d",
+        "voice-tts speak_hook enqueued: persona=%s msg=%s pulse=%s job=%s "
+        "len=%d sub_seq=%s is_final=%s",
         persona_id, message_id, pulse_id, job_id, len(cleaned),
+        sub_seq, is_final,
     )
