@@ -123,7 +123,11 @@ def _audio_stream_url(message_id: str, version: Optional[str] = None) -> str:
     return f"{base}?v={version}" if version else base
 
 
-def _notify_stream_ready(message_id: Optional[str], version: Optional[str] = None) -> None:
+def _notify_stream_ready(
+    message_id: Optional[str],
+    version: Optional[str] = None,
+    pulse_id: Optional[str] = None,
+) -> None:
     """Broadcast audio_ready at stream open time.
 
     ストリーミング推論で使用。合成完了を待たずに発火することで、クライアント側
@@ -157,11 +161,18 @@ def _notify_stream_ready(message_id: Optional[str], version: Optional[str] = Non
         LOGGER.warning("notify_stream_ready set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
+        # pulse_id を payload に載せると subscriber (= frontend / stackchan) が
+        # 「同 pulse 連続発話 → queue 末尾」 「別 pulse 着信 → 旧再生中断 + 新
+        # 再生」 の preempt 判定に使える (= Phase 2 設計)。 None ならフィールド
+        # は省略して旧 subscriber と互換。
+        event_data: Dict[str, Any] = {"audio_stream_url": stream_url}
+        if pulse_id is not None:
+            event_data["pulse_id"] = pulse_id
         emit_addon_event(
             addon=_ADDON_NAME,
             event="audio_ready",
             message_id=message_id,
-            data={"audio_stream_url": stream_url},
+            data=event_data,
         )
     except Exception as exc:
         LOGGER.warning("emit_addon_event(stream_ready) failed for msg=%s: %s", message_id, exc)
@@ -172,6 +183,7 @@ def _notify_audio_ready(
     wav_path: Path,
     event_name: str = "audio_ready",
     version: Optional[str] = None,
+    pulse_id: Optional[str] = None,
 ) -> None:
     """Register wav metadata and broadcast a completion event.
 
@@ -221,11 +233,18 @@ def _notify_audio_ready(
         LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
+        # 同上 (= _notify_stream_ready 参照): pulse_id を載せておくと subscriber
+        # が Phase 2 preempt 判定に使える。 audio_completed は streaming 経路の
+        # 完了通知だが、 frontend 側で「現再生中の pulse_id」 を更新するために
+        # も使えるので含めておく。
+        event_data: Dict[str, Any] = {"audio_path": audio_path}
+        if pulse_id is not None:
+            event_data["pulse_id"] = pulse_id
         emit_addon_event(
             addon=_ADDON_NAME,
             event=event_name,
             message_id=message_id,
-            data={"audio_path": audio_path},
+            data=event_data,
         )
         event_ok = True
     except Exception as exc:
@@ -253,6 +272,12 @@ class _Job:
     persona_id: Optional[str]
     text: str
     message_id: Optional[str] = None
+    # ペルソナの 1 pulse 識別子。 SAIVerse 本体の persona_speak event に載って
+    # きた値をそのまま下流 (= audio_ready event の subscriber) に伝搬させる。
+    # subscriber 側 (frontend / stackchan) は pulse_id 比較で「同 pulse 連続
+    # 発話 (= queue 末尾)」 vs 「別 pulse 着信 (= 旧再生中断 + 新再生)」 を
+    # 切り分ける (= Phase 2 設計)。 詳細: docs/intent/voice_tts_playback_queue.md
+    pulse_id: Optional[str] = None
 
 
 class _TTSWorker:
@@ -350,6 +375,7 @@ class _TTSWorker:
         message_id: Optional[str] = None,
         server_side_playback: bool = True,
         output_device: Optional[int] = None,
+        pulse_id: Optional[str] = None,
     ) -> bool:
         """Synthesize and play chunk-by-chunk while saving the full wav.
 
@@ -411,7 +437,7 @@ class _TTSWorker:
                         # 側で /stream エンドポイントは arrayBuffer バッファ展開を
                         # スキップして素通しするようになったため、クライアントは
                         # ここからチャンクを progressive に受け取って早期再生できる。
-                        _notify_stream_ready(message_id, version=job_id)
+                        _notify_stream_ready(message_id, version=job_id, pulse_id=pulse_id)
                     first_chunk_at = time.time()
                     LOGGER.debug(
                         "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
@@ -460,7 +486,11 @@ class _TTSWorker:
             # ストリーミング経路は stream_ready で audio_ready 発火済み。
             # ここでは完成 wav の metadata を確定させ、別イベント名で通知して
             # auto_play_tts の二重発火を避けつつフロントの addonMetadata を更新する。
-            _notify_audio_ready(message_id, wav_path, event_name="audio_completed", version=job_id)
+            _notify_audio_ready(
+                message_id, wav_path,
+                event_name="audio_completed", version=job_id,
+                pulse_id=pulse_id,
+            )
         except Exception as exc:
             LOGGER.warning("Failed to save streamed wav: %s", exc)
 
@@ -539,6 +569,7 @@ class _TTSWorker:
                 message_id=job.message_id,
                 server_side_playback=server_side_playback,
                 output_device=resolved_device,
+                pulse_id=job.pulse_id,
             )
             if ok:
                 return
@@ -563,7 +594,10 @@ class _TTSWorker:
             LOGGER.warning("Failed to save wav: %s", exc)
 
         if wav_path is not None:
-            _notify_audio_ready(job.message_id, wav_path, version=job.job_id)
+            _notify_audio_ready(
+                job.message_id, wav_path, version=job.job_id,
+                pulse_id=job.pulse_id,
+            )
 
         if server_side_playback:
             self._play(result.audio, result.sample_rate, output_device=resolved_device)
@@ -604,6 +638,7 @@ class _TTSWorker:
         text: str,
         persona_id: Optional[str],
         message_id: Optional[str] = None,
+        pulse_id: Optional[str] = None,
     ) -> str:
         self.start()
         job_id = uuid.uuid4().hex
@@ -612,8 +647,8 @@ class _TTSWorker:
         # 明示的に渡せるようにする。
         captured_msg_id = message_id or _get_active_message_id()
         LOGGER.debug(
-            "enqueue: job=%s persona=%s message_id=%s",
-            job_id, persona_id, captured_msg_id,
+            "enqueue: job=%s persona=%s message_id=%s pulse_id=%s",
+            job_id, persona_id, captured_msg_id, pulse_id,
         )
         self._queue.put(
             _Job(
@@ -621,6 +656,7 @@ class _TTSWorker:
                 persona_id=persona_id,
                 text=text,
                 message_id=captured_msg_id,
+                pulse_id=pulse_id,
             )
         )
         return job_id
@@ -642,6 +678,7 @@ def enqueue_tts(
     text: str,
     persona_id: Optional[str],
     message_id: Optional[str] = None,
+    pulse_id: Optional[str] = None,
 ) -> str:
     """TTS ジョブを enqueue する。
 
@@ -651,5 +688,11 @@ def enqueue_tts(
         message_id: バブル紐付け用 ID。None なら呼び出し時の contextvars から取得
             (通常の speak_as_persona ツール経路)。再生成 API のように context が
             無い経路は明示的に渡す。
+        pulse_id: ペルソナ pulse 識別子。 audio_ready event payload に載せて
+            subscriber 側 (frontend / stackchan) の同 pulse / 別 pulse 判定に
+            使う (= Phase 2)。 None なら subscriber 側は preempt 判定不能で
+            FIFO wait に倒す (= Phase 1 互換動作)。
     """
-    return _worker.enqueue(text, persona_id, message_id=message_id)
+    return _worker.enqueue(
+        text, persona_id, message_id=message_id, pulse_id=pulse_id,
+    )

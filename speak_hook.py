@@ -62,8 +62,15 @@ def on_persona_speak(
     if not cleaned:
         return
 
-    job_id = enqueue_tts(cleaned, persona_id, message_id=message_id)
+    # pulse_id を audio_ready event payload まで引き渡す経路 (Phase 2 設計)。
+    # subscriber 側 (frontend / stackchan) が同 pulse / 別 pulse の判定で
+    # queue 末尾積み or 旧再生 preempt を切り替えるのに使う。
+    pulse_id = _kwargs.get("pulse_id")
+
+    job_id = enqueue_tts(
+        cleaned, persona_id, message_id=message_id, pulse_id=pulse_id,
+    )
     LOGGER.debug(
-        "voice-tts speak_hook enqueued: persona=%s msg=%s job=%s len=%d",
-        persona_id, message_id, job_id, len(cleaned),
+        "voice-tts speak_hook enqueued: persona=%s msg=%s pulse=%s job=%s len=%d",
+        persona_id, message_id, pulse_id, job_id, len(cleaned),
     )
