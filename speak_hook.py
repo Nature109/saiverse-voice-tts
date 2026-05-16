@@ -38,7 +38,7 @@ def on_persona_speak(
             ``metadata`` 等。本ハンドラでは未使用だが、本体側でペイロード項目が
             増えても壊れないように受ける。
     """
-    if not persona_id or not text_for_voice or not message_id:
+    if not persona_id or not message_id:
         return
 
     # アドオン UI の有効化トグルとペルソナ別 auto_speak フラグを尊重する。
@@ -58,10 +58,6 @@ def on_persona_speak(
         )
         return
 
-    cleaned = clean_text_for_tts(text_for_voice)
-    if not cleaned:
-        return
-
     # pulse_id を audio_ready event payload まで引き渡す経路 (Phase 2 設計)。
     # subscriber 側 (frontend / stackchan) が同 pulse / 別 pulse の判定で
     # queue 末尾積み or 旧再生 preempt を切り替えるのに使う。
@@ -72,6 +68,19 @@ def on_persona_speak(
     # sub_seq / is_final が無ければ従来の 「1 message = 1 sub-text」 動作。
     sub_seq = _kwargs.get("sub_seq")
     is_final = _kwargs.get("is_final", True)
+
+    # Pipeline Streaming finalize signal: ``text_for_voice=""`` + ``is_final=True``
+    # は 「sub-speak で全テキスト受信済、 voice-tts 側は stream close + wav 保存
+    # だけ走らせて」 という SAIVerse 本体側の依頼。 worker 側に enqueue して
+    # 既存 message_state を閉じる経路に流す (合成 engine は呼ばない)。
+    if not text_for_voice:
+        if not is_final:
+            return
+        cleaned = ""
+    else:
+        cleaned = clean_text_for_tts(text_for_voice)
+        if not cleaned and not is_final:
+            return
 
     job_id = enqueue_tts(
         cleaned, persona_id,

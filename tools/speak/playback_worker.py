@@ -705,6 +705,21 @@ class _TTSWorker:
                 pass
 
     def _process(self, job: _Job) -> None:
+        # Pipeline Streaming finalize-only signal: text="" + is_final=True
+        # の job は 「合成は不要、 既存 _MessageState を閉じて wav 保存だけ」
+        # という SAIVerse 本体側の依頼。 既存 state があれば finalize、
+        # なければ noop で抜ける (= sub-speak が一度も来なかった message)。
+        if not job.text and job.is_final and job.message_id:
+            state = self._message_states.get(job.message_id)
+            if state is None:
+                LOGGER.debug(
+                    "finalize-only job for unknown msg=%s; ignoring",
+                    job.message_id,
+                )
+                return
+            self._finalize_message_state(state, job.message_id, job.pulse_id)
+            return
+
         profile = get_profile(job.persona_id)
         if profile is None:
             LOGGER.info(
