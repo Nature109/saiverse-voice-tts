@@ -13,9 +13,9 @@ import queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -31,6 +31,24 @@ _PACK_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONFIG_PATH = _PACK_ROOT / "config" / "default.json"
 _CONFIG_TEMPLATE_PATH = _PACK_ROOT / "config" / "default.json.template"
 _ADDON_NAME = "saiverse-voice-tts"
+
+# ----- Chunk push 流量制御 (= subscriber 側 buffer overflow 抑制) ---
+# 高水位 / 低水位パターン: 「subscriber に先行送信した秒数 (= lead)」 が
+# 高水位を超えたら、 低水位まで戻るよう sleep する。 GPU 推論が realtime より
+# 速いと chunk が無限に push されて subscriber 側 socket buffer 詰まり →
+# client write timeout 連鎖死、 という観測 (session 20260515_131732 の
+# stackchan_room:177 が 17.82s lead で死亡) への対策。
+#
+# 値の根拠: stack-chan (gateway → ESP32 forward + ESP32 内 buffer 含む) を
+# 想定した保守値。 観測死亡値 17s に対して半分以下の高水位 + 安全マージン
+# 込みの低水位。 web UI 等他の subscriber は通常もっと余裕があるので、
+# 統一値で問題ない (= 厳しい subscriber 基準で全環境統一)。
+_FLOW_LEAD_HIGH_SECONDS = 8.0
+_FLOW_LEAD_LOW_SECONDS = 3.0
+# subscriber が再生を開始するまでのラグ (= speak_hook の first chunk 待ち、
+# gateway → ESP32 forward の startup、 ブラウザ HTML5 audio canplay 等)。
+# 1 秒は推測値で、 実観測より小さく見積もる (= lead を大きめに出して安全側)。
+_FLOW_SUBSCRIBER_STARTUP_ALPHA = 1.0
 
 
 def _get_active_message_id() -> Optional[str]:
@@ -123,7 +141,11 @@ def _audio_stream_url(message_id: str, version: Optional[str] = None) -> str:
     return f"{base}?v={version}" if version else base
 
 
-def _notify_stream_ready(message_id: Optional[str], version: Optional[str] = None) -> None:
+def _notify_stream_ready(
+    message_id: Optional[str],
+    version: Optional[str] = None,
+    pulse_id: Optional[str] = None,
+) -> None:
     """Broadcast audio_ready at stream open time.
 
     ストリーミング推論で使用。合成完了を待たずに発火することで、クライアント側
@@ -157,11 +179,18 @@ def _notify_stream_ready(message_id: Optional[str], version: Optional[str] = Non
         LOGGER.warning("notify_stream_ready set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
+        # pulse_id を payload に載せると subscriber (= frontend / stackchan) が
+        # 「同 pulse 連続発話 → queue 末尾」 「別 pulse 着信 → 旧再生中断 + 新
+        # 再生」 の preempt 判定に使える (= Phase 2 設計)。 None ならフィールド
+        # は省略して旧 subscriber と互換。
+        event_data: Dict[str, Any] = {"audio_stream_url": stream_url}
+        if pulse_id is not None:
+            event_data["pulse_id"] = pulse_id
         emit_addon_event(
             addon=_ADDON_NAME,
             event="audio_ready",
             message_id=message_id,
-            data={"audio_stream_url": stream_url},
+            data=event_data,
         )
     except Exception as exc:
         LOGGER.warning("emit_addon_event(stream_ready) failed for msg=%s: %s", message_id, exc)
@@ -172,6 +201,7 @@ def _notify_audio_ready(
     wav_path: Path,
     event_name: str = "audio_ready",
     version: Optional[str] = None,
+    pulse_id: Optional[str] = None,
 ) -> None:
     """Register wav metadata and broadcast a completion event.
 
@@ -221,11 +251,18 @@ def _notify_audio_ready(
         LOGGER.warning("set_metadata failed for msg=%s: %s", message_id, exc)
     try:
         from saiverse.addon_events import emit_addon_event  # type: ignore
+        # 同上 (= _notify_stream_ready 参照): pulse_id を載せておくと subscriber
+        # が Phase 2 preempt 判定に使える。 audio_completed は streaming 経路の
+        # 完了通知だが、 frontend 側で「現再生中の pulse_id」 を更新するために
+        # も使えるので含めておく。
+        event_data: Dict[str, Any] = {"audio_path": audio_path}
+        if pulse_id is not None:
+            event_data["pulse_id"] = pulse_id
         emit_addon_event(
             addon=_ADDON_NAME,
             event=event_name,
             message_id=message_id,
-            data={"audio_path": audio_path},
+            data=event_data,
         )
         event_ok = True
     except Exception as exc:
@@ -253,6 +290,54 @@ class _Job:
     persona_id: Optional[str]
     text: str
     message_id: Optional[str] = None
+    # ペルソナの 1 pulse 識別子。 SAIVerse 本体の persona_speak event に載って
+    # きた値をそのまま下流 (= audio_ready event の subscriber) に伝搬させる。
+    # subscriber 側 (frontend / stackchan) は pulse_id 比較で「同 pulse 連続
+    # 発話 (= queue 末尾)」 vs 「別 pulse 着信 (= 旧再生中断 + 新再生)」 を
+    # 切り分ける (= Phase 2 設計)。 詳細: docs/intent/voice_tts_playback_queue.md
+    pulse_id: Optional[str] = None
+    # Pipeline Streaming (= sea runtime 側の文区切り sub-speak emit) で同一
+    # message_id に複数 sub-text を連続 enqueue するための識別子。 詳細:
+    # docs/intent/voice_tts_pipeline_streaming.md
+    #
+    # ``sub_seq``: 同 message_id 内の連番 (1 から開始)。 None なら従来の
+    # 「1 message = 1 job」 で動作 (= 互換)。
+    # ``is_final``: この sub-text で当該 message の合成が完結する (= 後続が
+    # 来ない、 audio_stream を close してよい合図)。 sub_seq=None の場合は
+    # 必ず True 扱い。
+    sub_seq: Optional[int] = None
+    is_final: bool = True
+
+
+@dataclass
+class _MessageState:
+    """同 message_id の sub-text 群 (= sub_seq=1, 2, ...) で共有する状態。
+
+    Pipeline Streaming の voice-tts 側受け入れ機構 (Phase 2-α) で使う。
+    sub_seq=1 (= 初回 sub-text) の合成中に audio_stream を open し、
+    ``is_final=True`` の sub-text 完了時に close + wav 保存する。 中間 sub-text
+    完了時には何も close せず ``collected`` に貯めて次の sub-text を待つ。
+
+    ``sub_seq`` 機構を使わない 「1 message = 1 job」 経路 (= 既存互換) の場合
+    でも _MessageState は使うが、 sub_seq=1 + is_final=True で 1 回開いて
+    閉じる単純動作になる。
+    """
+    message_id: str
+    pulse_id: Optional[str] = None
+    sample_rate: Optional[int] = None
+    first_chunk_at: Optional[float] = None
+    # 流量制御 (= lead 計算) と wav 保存時の concatenate 用に push 済の audio
+    # を sub-text 跨ぎで蓄積する
+    collected: List[Any] = field(default_factory=list)
+    # sounddevice OutputStream (server_side_playback=True 時に保持)。 同
+    # message_id 内では同じ stream を持続使用、 is_final=True で stop+close
+    sd_stream: Any = None
+    # audio_stream registry に open_stream / open_pcm_stream を呼んだか
+    audio_stream_opened: bool = False
+    # 流量制御ログ + wav 保存ファイル名用に最初の sub_seq の job_id を覚える
+    initial_job_id: Optional[str] = None
+    # 累積発話時間 (= wav 保存時のデバッグ用)
+    t_start: Optional[float] = None
 
 
 class _TTSWorker:
@@ -261,6 +346,11 @@ class _TTSWorker:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._engines: Dict[str, TTSEngine] = {}
+        # Pipeline Streaming で同 message_id の sub-text 群が共有する状態。
+        # _process は 1 worker thread から逐次 access するので競合しないが、
+        # 「is_final=True の job が完了した時に state を drop」 を確実にする
+        # ため明示的に管理する。
+        self._message_states: Dict[str, _MessageState] = {}
         self._config: Dict[str, Any] = {}
         self._config_loaded = False
         self._lock = threading.Lock()
@@ -350,6 +440,9 @@ class _TTSWorker:
         message_id: Optional[str] = None,
         server_side_playback: bool = True,
         output_device: Optional[int] = None,
+        pulse_id: Optional[str] = None,
+        sub_seq: Optional[int] = None,
+        is_final: bool = True,
     ) -> bool:
         """Synthesize and play chunk-by-chunk while saving the full wav.
 
@@ -357,6 +450,16 @@ class _TTSWorker:
         in-process ``audio_stream`` registry so that the HTTP endpoint
         ``/api/addon/saiverse-voice-tts/audio/<message_id>/stream`` can serve
         the same audio to remote clients via HTTP Chunked Transfer.
+
+        Pipeline Streaming (Phase 2-α): when ``sub_seq`` is set, this method
+        looks up / creates a ``_MessageState`` for ``message_id`` and uses
+        it to keep ``audio_stream`` open across multiple sub-text jobs. The
+        first sub-text (sub_seq=1) opens the streams and fires
+        ``audio_ready``; intermediate sub-texts only push chunks; the final
+        sub-text (``is_final=True``) closes the streams, saves the
+        accumulated wav and fires ``audio_completed``. Old "1 message =
+        1 job" behavior is preserved when ``sub_seq is None`` (or when
+        sub_seq=1 + is_final=True, which is the same effective shape).
 
         Returns True on success, False if streaming fell through and caller
         should use the non-streaming fallback.
@@ -374,12 +477,24 @@ class _TTSWorker:
 
         device = output_device
 
-        collected: list[np.ndarray] = []
-        stream = None
-        http_opened = False
-        sample_rate: Optional[int] = None
-        first_chunk_at: Optional[float] = None
-        t_start = time.time()
+        # Pipeline Streaming: 同 message_id の sub-text 跨ぎで shared state を
+        # 使う。 sub_seq=None / message_id=None なら ephemeral state で動かす
+        # (= 従来の 「1 sub-text 完結」 と等価動作)。
+        if message_id and sub_seq is not None:
+            state = self._message_states.get(message_id)
+            if state is None:
+                state = _MessageState(message_id=message_id, pulse_id=pulse_id)
+                self._message_states[message_id] = state
+        else:
+            state = _MessageState(
+                message_id=message_id or "",
+                pulse_id=pulse_id,
+            )
+        if state.t_start is None:
+            state.t_start = time.time()
+        if state.initial_job_id is None:
+            state.initial_job_id = job_id
+
         try:
             for chunk in engine.synthesize_stream(
                 text=text, ref_audio=ref_audio, ref_text=ref_text, params=params,
@@ -389,72 +504,190 @@ class _TTSWorker:
                     audio_np = audio_np.reshape(-1)
                 if audio_np.size == 0:
                     continue
-                if sample_rate is None:
-                    sample_rate = chunk.sample_rate
+                if state.sample_rate is None:
+                    # 初回 chunk (= 同 message 内で最初に音が出る瞬間)。
+                    # sd OutputStream + audio_stream / pcm_stream を開いて
+                    # audio_ready を発火する。 sub_seq>=2 の sub-text は
+                    # state.sample_rate が既に set されているのでここに来ない。
+                    state.sample_rate = chunk.sample_rate
                     if sd is not None:
-                        stream = sd.OutputStream(
-                            samplerate=sample_rate,
+                        state.sd_stream = sd.OutputStream(
+                            samplerate=state.sample_rate,
                             channels=1,
                             device=device,
                             dtype="float32",
                         )
-                        stream.start()
+                        state.sd_stream.start()
                     if message_id:
-                        audio_stream.open_stream(message_id, sample_rate)
-                        http_opened = True
+                        audio_stream.open_stream(message_id, state.sample_rate)
+                        # PCM 経路も並行で open (Stack-chan 等の物理 vessel が
+                        # MP3 decode を省いて直接 playRaw に流すための経路)
+                        audio_stream.open_pcm_stream(
+                            message_id, state.sample_rate, channels=1,
+                        )
+                        state.audio_stream_opened = True
                         # ストリーム開始直後に audio_ready を発火する。Route Handler
                         # 側で /stream エンドポイントは arrayBuffer バッファ展開を
                         # スキップして素通しするようになったため、クライアントは
                         # ここからチャンクを progressive に受け取って早期再生できる。
-                        _notify_stream_ready(message_id, version=job_id)
-                    first_chunk_at = time.time()
+                        _notify_stream_ready(
+                            message_id, version=state.initial_job_id, pulse_id=pulse_id,
+                        )
+                    state.first_chunk_at = time.time()
                     LOGGER.debug(
-                        "TTS first chunk ready after %.2fs (job=%s, msg=%s)",
-                        first_chunk_at - t_start, job_id, message_id,
+                        "TTS first chunk ready after %.2fs (job=%s, msg=%s, sub=%s)",
+                        state.first_chunk_at - state.t_start, job_id, message_id, sub_seq,
                     )
-                if stream is not None:
-                    stream.write(audio_np.astype(np.float32, copy=False))
-                if http_opened:
-                    audio_stream.push_chunk(
-                        message_id, self._to_int16_bytes(audio_np),
+                elif chunk.sample_rate != state.sample_rate:
+                    # 同 message 内で sample_rate が変わるのは voice profile 切替等
+                    # の異常系。 普通は起きないが起きたら警告だけ残して続行
+                    # (= state.sample_rate のまま push、 音は崩れる可能性)。
+                    LOGGER.warning(
+                        "TTS sample_rate mismatch within message: msg=%s "
+                        "expected=%d got=%d (sub=%s)",
+                        message_id, state.sample_rate, chunk.sample_rate, sub_seq,
                     )
-                collected.append(audio_np)
+                # ----- Flow control (高水位/低水位 + α 補正) -----
+                # 既に push 済 (= state.collected) の合計秒数と、 subscriber が
+                # 再生できた推測秒数 (= elapsed - α) の差を 「lead」 として、
+                # これが高水位を超えたら低水位まで戻すよう sleep する。 GPU
+                # 推論が realtime より速いと chunk が無限に push されて
+                # subscriber 側 buffer 詰まり → write timeout 連鎖死、 という
+                # 観測 (session 20260515_131732 の stackchan_room:177 が 17.82s
+                # lead で死亡) への対策。 詳細は intent doc 参照。
+                #
+                # state.collected は sub-text 跨ぎで累積するので、 sub_seq=2 の
+                # 最初の chunk でも 「sub_seq=1 の合計」 が見えており lead 判定
+                # が正しく機能する。
+                if state.collected and state.first_chunk_at is not None and state.sample_rate:
+                    total_sent_seconds = sum(
+                        len(a) / state.sample_rate for a in state.collected
+                    )
+                    elapsed = time.time() - state.first_chunk_at
+                    actual_played = elapsed - _FLOW_SUBSCRIBER_STARTUP_ALPHA
+                    lead_seconds = total_sent_seconds - actual_played
+                    if lead_seconds > _FLOW_LEAD_HIGH_SECONDS:
+                        sleep_seconds = lead_seconds - _FLOW_LEAD_LOW_SECONDS
+                        LOGGER.debug(
+                            "flow control: lead=%.2fs > %.1fs, "
+                            "sleep %.2fs to bring back to %.1fs "
+                            "(job=%s, msg=%s, sub=%s)",
+                            lead_seconds, _FLOW_LEAD_HIGH_SECONDS,
+                            sleep_seconds, _FLOW_LEAD_LOW_SECONDS,
+                            job_id, message_id, sub_seq,
+                        )
+                        time.sleep(sleep_seconds)
+
+                if state.sd_stream is not None:
+                    state.sd_stream.write(audio_np.astype(np.float32, copy=False))
+                if state.audio_stream_opened:
+                    pcm_bytes = self._to_int16_bytes(audio_np)
+                    audio_stream.push_chunk(message_id, pcm_bytes)
+                    # PCM 経路にも同じ bytes を broadcast
+                    audio_stream.push_pcm_chunk(message_id, pcm_bytes)
+                state.collected.append(audio_np)
         except Exception as exc:
-            LOGGER.error("Streaming synthesis/playback failed: %s", exc)
-            if http_opened:
-                audio_stream.close_stream(message_id)
+            LOGGER.error(
+                "Streaming synthesis/playback failed: %s (msg=%s, sub=%s)",
+                exc, message_id, sub_seq,
+            )
+            self._teardown_message_state(state, message_id)
             return False
-        finally:
-            if stream is not None:
-                try:
-                    stream.stop()
-                    stream.close()
-                except Exception:
-                    pass
 
-        if http_opened:
+        # is_final=False (= 中間 sub-text) の場合は ここで return。 stream は
+        # 開いたまま、 collected は累積したまま、 次の sub-text の
+        # _play_streaming 呼び出しで再利用される。
+        if not is_final:
+            LOGGER.debug(
+                "Streaming sub-text complete (intermediate): job=%s msg=%s sub=%s "
+                "collected_chunks=%d",
+                job_id, message_id, sub_seq, len(state.collected),
+            )
+            return True
+
+        # is_final=True: 全 sub-text 合成終了。 stream を close + wav 保存 +
+        # audio_completed event 発火 + state を drop。
+        return self._finalize_message_state(state, message_id, pulse_id)
+
+    def _teardown_message_state(
+        self, state: _MessageState, message_id: Optional[str]
+    ) -> None:
+        """例外発生時に state を完全 close + drop してリソースリークを防ぐ。
+
+        is_final 待たずに発火するので、 audio_stream は 「合成が途中で死んだ」
+        状態で close される (= subscriber 側は突然 stream 終わる)。
+        """
+        if state.sd_stream is not None:
+            try:
+                state.sd_stream.stop()
+                state.sd_stream.close()
+            except Exception:
+                pass
+            state.sd_stream = None
+        if state.audio_stream_opened and message_id:
             audio_stream.close_stream(message_id)
+            audio_stream.close_pcm_stream(message_id)
+            state.audio_stream_opened = False
+        if message_id and state.message_id == message_id:
+            self._message_states.pop(message_id, None)
 
-        if not collected or sample_rate is None:
-            LOGGER.warning("Streaming produced no audio for job %s", job_id)
+    def _finalize_message_state(
+        self,
+        state: _MessageState,
+        message_id: Optional[str],
+        pulse_id: Optional[str],
+    ) -> bool:
+        """is_final=True の sub-text 完了時に呼ぶ。 stream を綺麗に閉じ、
+        累積 wav を保存して audio_completed を emit、 state を drop する。
+        """
+        # sd OutputStream を閉じる
+        if state.sd_stream is not None:
+            try:
+                state.sd_stream.stop()
+                state.sd_stream.close()
+            except Exception:
+                pass
+            state.sd_stream = None
+
+        # audio_stream registry を閉じる
+        if state.audio_stream_opened and message_id:
+            audio_stream.close_stream(message_id)
+            audio_stream.close_pcm_stream(message_id)
+            state.audio_stream_opened = False
+
+        # state を dict から外す (= 同 message_id の次の発話用に空ける)
+        if message_id:
+            self._message_states.pop(message_id, None)
+
+        if not state.collected or state.sample_rate is None:
+            LOGGER.warning(
+                "Streaming produced no audio for msg=%s (initial job=%s)",
+                message_id, state.initial_job_id,
+            )
             return False
 
         try:
-            full = np.concatenate(collected)
-            wav_path = self._save_wav(full, sample_rate, job_id)
-            LOGGER.debug(
-                "TTS streamed wav saved: %s (%d ms, total %.2fs)",
-                wav_path, int(len(full) / sample_rate * 1000), time.time() - t_start,
+            full = np.concatenate(state.collected)
+            t_total = (
+                time.time() - state.t_start if state.t_start is not None else 0.0
             )
-            # ストリーミング経路は _notify_stream_ready で先に audio_ready を
-            # 発火済み。ここでは完成 wav の metadata (audio_file) だけ更新し、
-            # event の重複発火を避ける。
+            wav_path = self._save_wav(full, state.sample_rate, state.initial_job_id or "")
+            LOGGER.debug(
+                "TTS streamed wav saved: %s (%d ms, total %.2fs, msg=%s)",
+                wav_path, int(len(full) / state.sample_rate * 1000),
+                t_total, message_id,
+            )
             # ストリーミング経路は stream_ready で audio_ready 発火済み。
             # ここでは完成 wav の metadata を確定させ、別イベント名で通知して
             # auto_play_tts の二重発火を避けつつフロントの addonMetadata を更新する。
-            _notify_audio_ready(message_id, wav_path, event_name="audio_completed", version=job_id)
+            _notify_audio_ready(
+                message_id, wav_path,
+                event_name="audio_completed",
+                version=state.initial_job_id,
+                pulse_id=pulse_id,
+            )
         except Exception as exc:
-            LOGGER.warning("Failed to save streamed wav: %s", exc)
+            LOGGER.warning("Failed to save streamed wav: %s (msg=%s)", exc, message_id)
 
         return True
 
@@ -472,6 +705,21 @@ class _TTSWorker:
                 pass
 
     def _process(self, job: _Job) -> None:
+        # Pipeline Streaming finalize-only signal: text="" + is_final=True
+        # の job は 「合成は不要、 既存 _MessageState を閉じて wav 保存だけ」
+        # という SAIVerse 本体側の依頼。 既存 state があれば finalize、
+        # なければ noop で抜ける (= sub-speak が一度も来なかった message)。
+        if not job.text and job.is_final and job.message_id:
+            state = self._message_states.get(job.message_id)
+            if state is None:
+                LOGGER.debug(
+                    "finalize-only job for unknown msg=%s; ignoring",
+                    job.message_id,
+                )
+                return
+            self._finalize_message_state(state, job.message_id, job.pulse_id)
+            return
+
         profile = get_profile(job.persona_id)
         if profile is None:
             LOGGER.info(
@@ -531,6 +779,9 @@ class _TTSWorker:
                 message_id=job.message_id,
                 server_side_playback=server_side_playback,
                 output_device=resolved_device,
+                pulse_id=job.pulse_id,
+                sub_seq=job.sub_seq,
+                is_final=job.is_final,
             )
             if ok:
                 return
@@ -555,7 +806,10 @@ class _TTSWorker:
             LOGGER.warning("Failed to save wav: %s", exc)
 
         if wav_path is not None:
-            _notify_audio_ready(job.message_id, wav_path, version=job.job_id)
+            _notify_audio_ready(
+                job.message_id, wav_path, version=job.job_id,
+                pulse_id=job.pulse_id,
+            )
 
         if server_side_playback:
             self._play(result.audio, result.sample_rate, output_device=resolved_device)
@@ -596,6 +850,9 @@ class _TTSWorker:
         text: str,
         persona_id: Optional[str],
         message_id: Optional[str] = None,
+        pulse_id: Optional[str] = None,
+        sub_seq: Optional[int] = None,
+        is_final: bool = True,
     ) -> str:
         self.start()
         job_id = uuid.uuid4().hex
@@ -604,8 +861,8 @@ class _TTSWorker:
         # 明示的に渡せるようにする。
         captured_msg_id = message_id or _get_active_message_id()
         LOGGER.debug(
-            "enqueue: job=%s persona=%s message_id=%s",
-            job_id, persona_id, captured_msg_id,
+            "enqueue: job=%s persona=%s message_id=%s pulse_id=%s sub_seq=%s is_final=%s",
+            job_id, persona_id, captured_msg_id, pulse_id, sub_seq, is_final,
         )
         self._queue.put(
             _Job(
@@ -613,6 +870,9 @@ class _TTSWorker:
                 persona_id=persona_id,
                 text=text,
                 message_id=captured_msg_id,
+                pulse_id=pulse_id,
+                sub_seq=sub_seq,
+                is_final=is_final,
             )
         )
         return job_id
@@ -634,6 +894,9 @@ def enqueue_tts(
     text: str,
     persona_id: Optional[str],
     message_id: Optional[str] = None,
+    pulse_id: Optional[str] = None,
+    sub_seq: Optional[int] = None,
+    is_final: bool = True,
 ) -> str:
     """TTS ジョブを enqueue する。
 
@@ -643,5 +906,20 @@ def enqueue_tts(
         message_id: バブル紐付け用 ID。None なら呼び出し時の contextvars から取得
             (通常の speak_as_persona ツール経路)。再生成 API のように context が
             無い経路は明示的に渡す。
+        pulse_id: ペルソナ pulse 識別子。 audio_ready event payload に載せて
+            subscriber 側 (frontend / stackchan) の同 pulse / 別 pulse 判定に
+            使う (= Phase 2)。 None なら subscriber 側は preempt 判定不能で
+            FIFO wait に倒す (= Phase 1 互換動作)。
+        sub_seq: Pipeline Streaming (Phase 2-α) の sub-text 連番 (1 から)。
+            同 message_id に複数回 enqueue する経路で使う。 None なら従来の
+            「1 message = 1 job」 動作 (= 互換)。
+        is_final: この sub-text で当該 message の合成が完結する合図。
+            True なら audio_stream を close + wav 保存 + audio_completed 発火。
+            False なら stream open 持続で次の sub-text を待つ。 sub_seq=None の
+            場合は必ず True 扱い (= 1 sub-text 完結)。
     """
-    return _worker.enqueue(text, persona_id, message_id=message_id)
+    return _worker.enqueue(
+        text, persona_id,
+        message_id=message_id, pulse_id=pulse_id,
+        sub_seq=sub_seq, is_final=is_final,
+    )
